@@ -27,7 +27,8 @@ endif()
 
 add_library(apex_core STATIC
     src/core/instance.cpp
-    src/geo/hilbert.cpp)
+    src/geo/hilbert.cpp
+    src/geo/grid.cpp)
 target_include_directories(apex_core PUBLIC src)
 target_link_libraries(apex_core PUBLIC apex_warnings)
 
@@ -39,7 +40,8 @@ enable_testing()
 add_executable(engine_tests
     tests/test_main.cpp
     tests/test_instance.cpp
-    tests/test_hilbert.cpp)
+    tests/test_hilbert.cpp
+    tests/test_grid.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
 target_link_libraries(engine_tests PRIVATE apex_core)
