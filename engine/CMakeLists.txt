@@ -42,9 +42,11 @@ add_library(apex_core STATIC
     src/cuts/support.cpp
     src/cuts/shrink.cpp
     src/cuts/mincut.cpp
-    src/cuts/blossom.cpp)
+    src/cuts/blossom.cpp
+    src/cuts/pool.cpp)
 target_include_directories(apex_core PUBLIC src)
-target_link_libraries(apex_core PUBLIC apex_warnings)
+find_package(Threads REQUIRED)
+target_link_libraries(apex_core PUBLIC apex_warnings Threads::Threads)
 
 add_executable(engine src/app/main.cpp)
 set_target_properties(engine PROPERTIES OUTPUT_NAME apex_tsp)
@@ -69,7 +71,8 @@ add_executable(engine_tests
     tests/test_support.cpp
     tests/test_shrink.cpp
     tests/test_mincut.cpp
-    tests/test_blossom.cpp)
+    tests/test_blossom.cpp
+    tests/test_pool.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
 target_link_libraries(engine_tests PRIVATE apex_core)

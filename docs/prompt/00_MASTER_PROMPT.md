@@ -305,6 +305,10 @@ may optimality be declared.
   because `x(delta({i,j})) = x(delta(i)) + x(delta(j)) - 2*x_ij = 2` and, for any S ⊇ {i,j},
   `x(delta(S)) = x(delta({i,j})) + x(delta(S∖{i,j}, V∖S)) >= 2`. (Prove this as a unit test;
   apply more aggressive Padberg–Rinaldi rules only if the brute-force property test passes.)
+  *Iterated shrinking (corrected 2026-11-04):* after contractions, parallel edges are summed; a
+  supernode pair (A, B) with x(A, B) >= 1 may be contracted only if **both** x(delta(A)) = 2 and
+  x(delta(B)) = 2. Merging across total capacity c > 1 creates a supernode of degree 4 - 2c < 2,
+  which is itself a violated SEC and must stay visible (never merged again).
 - **Blossom / 2-matching (corrected 2026-11-04, operator-approved):** handle H, odd set T of
   tooth edges in delta(H): `x(E(H)) + x(T) <= |H| + (|T|-1)/2`, equivalently under degree
   constraints `x(delta(H) \ T) - x(T) >= 1 - |T|`; violated when the left side is below
