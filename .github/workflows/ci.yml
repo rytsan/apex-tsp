@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            preset: dev-gcc
+          - os: ubuntu-24.04
+            preset: asan
+          - os: windows-2022
+            preset: dev-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache instances
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: tsplib-instances-v1
+
+      - name: Fetch instances
+        shell: bash
+        run: bash engine/tools/fetch_instances.sh
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Configure
+        working-directory: engine
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        working-directory: engine
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        working-directory: engine
+        run: ctest --preset ${{ matrix.preset }}
