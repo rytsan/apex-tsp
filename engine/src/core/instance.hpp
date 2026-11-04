@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <iosfwd>
 #include <stdexcept>
@@ -33,5 +34,21 @@ Instance read_tsplib(const std::string& path);
 void write_tsplib(std::ostream& out, const Instance& inst);
 
 const char* metric_name(Metric m);
+
+// Canonical TSPLIB distances (MASTER §2.1, §5.3): double, exact sqrt, original coordinates.
+inline int32_t euc2d(double x1, double y1, double x2, double y2) {
+    const double dx = x1 - x2, dy = y1 - y2;
+    return static_cast<int32_t>(std::floor(std::sqrt(dx * dx + dy * dy) + 0.5));
+}
+
+inline int32_t ceil2d(double x1, double y1, double x2, double y2) {
+    const double dx = x1 - x2, dy = y1 - y2;
+    return static_cast<int32_t>(std::ceil(std::sqrt(dx * dx + dy * dy)));
+}
+
+inline int32_t dist(const Instance& in, uint32_t i, uint32_t j) {
+    return in.metric == Metric::Ceil2D ? ceil2d(in.xs[i], in.ys[i], in.xs[j], in.ys[j])
+                                       : euc2d(in.xs[i], in.ys[i], in.xs[j], in.ys[j]);
+}
 
 }  // namespace apex
