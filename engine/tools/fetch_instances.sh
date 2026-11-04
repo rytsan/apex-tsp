@@ -17,4 +17,12 @@ for i in eil51 berlin52 a280 pr1002; do
 done
 [ -s mona-lisa100K.tsp ] || curl -sfL --retry 3 -o mona-lisa100K.tsp \
     https://www.math.uwaterloo.ca/tsp/data/ml/mona-lisa100K.tsp
-ls -l "$dir"
+# Netlib LPs (Sprint 1): uncompressed MPS copies from COIN-OR Data-Netlib
+# (same problems as https://www.netlib.org/lp/data/, which ships them in compressed EMPS form).
+mkdir -p netlib
+for i in adlittle 25fv47 sc205 share2b grow22; do
+    [ -s "netlib/$i.mps" ] && continue
+    curl -sfL --retry 3 -o "netlib/$i.mps.gz" "https://raw.githubusercontent.com/coin-or-tools/Data-Netlib/master/$i.mps.gz"
+    gunzip -f "netlib/$i.mps.gz"
+done
+ls -l "$dir" "$dir/netlib"
