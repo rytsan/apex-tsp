@@ -178,3 +178,22 @@ Approved deviations from the original kit (README §4: refinements are recorded 
 | 2026-11-04 | `DISPLAY_DATA_SECTION`-only instances rejected with a clear error | M0.1 |
 | 2026-11-04 | Reference hardware lowered to >= 4 physical cores | MASTER §3 |
 | 2026-11-04 | `.github/` at repo root (GitHub Actions requirement), not under `engine/` | MASTER §3 layout |
+
+---
+
+## 10. Sprint 0 results (hardware: AMD Ryzen 5 3600X, 6 cores / 5 visible physical cores under WSL2, 25 GB RAM, Linux 6.18 WSL2, GCC 13.3, preset `benchmark`)
+
+Command (seed 1, threads 1, `--time-limit 900 --mem-limit-mb 4096`; memory ceiling not enforced until Sprint 4):
+
+```
+build/benchmark/apex_tsp --instance data/<name>.tsp --mode scalable --seed 1 --threads 1 \
+  --time-limit 900 --mem-limit-mb 4096 --out out/<name>.tour --report out/<name>.json --checkpoint out/ck_<name>
+```
+
+| Instance | UB0 (Hilbert) | UB after 2-opt + Or-opt | Gap vs. MASTER §7 | Wall (s) | Peak RSS |
+|---|---|---|---|---|---|
+| mona-lisa100K | 6569127 | 5940385 | 3.182% (vs. 5757191) | 0.90 | 29.6 MB |
+| pla85900 | 188733742 | 155621179 | 9.298% | 0.54 | 27.8 MB |
+| usa13509 | 28549025 | 21534569 | 7.765% | 0.07 | 7.7 MB |
+
+Gap is computed offline against the reference value; the engine reports `gap_pct: null` until a valid LB exists.
