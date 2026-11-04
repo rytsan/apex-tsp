@@ -10,6 +10,11 @@ for i in eil51 berlin52 a280 pr1002 fl3795 d15112 d18512 usa13509 pla85900; do
     curl -sfL --retry 3 -o "$i.tsp.gz" "$base/$i.tsp.gz"
     gunzip -f "$i.tsp.gz"
 done
+for i in eil51 berlin52 a280 pr1002; do
+    [ -s "$i.opt.tour" ] && continue
+    curl -sfL --retry 3 -o "$i.opt.tour.gz" "$base/$i.opt.tour.gz"
+    gunzip -f "$i.opt.tour.gz"
+done
 [ -s mona-lisa100K.tsp ] || curl -sfL --retry 3 -o mona-lisa100K.tsp \
     https://www.math.uwaterloo.ca/tsp/data/ml/mona-lisa100K.tsp
 ls -l "$dir"

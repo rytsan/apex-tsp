@@ -24,7 +24,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data
-          key: tsplib-instances-v1
+          key: tsplib-instances-v2
 
       - name: Fetch instances
         shell: bash
