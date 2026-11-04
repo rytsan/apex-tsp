@@ -200,3 +200,17 @@ build/benchmark/apex_tsp --instance data/<name>.tsp --mode scalable --seed 1 --t
 | usa13509 | 28549025 | 21534569 | 7.765% | 0.07 | 7.7 MB |
 
 Gap is computed offline against the reference value; the engine reports `gap_pct: null` until a valid LB exists.
+
+---
+
+## 11. Sprint 1 results (hardware: AMD Ryzen 5 3600X, 5 physical cores visible under WSL2, 25 GB RAM, GCC 13.3, preset `benchmark`)
+
+Full transcript and procedure: [`docs/LP_GATE.md`](docs/LP_GATE.md).
+
+| Gate | Result |
+|---|---|
+| G1.1 Netlib optima (5/5, rel. err <= 1e-6) | 5/5; worst rel. err 1.59e-11 (GROW22) |
+| G1.2 vs. HiGHS 1.15.1 dual simplex, presolve off (time <= 10x, iterations <= 3x) | Devex 4.3x time / 1.51x iterations; DSE 3.2x / 1.16x |
+| G1.3 pr1002-shaped stress LP | 6002 x 5263: optimal, 2951 it/s (Devex); 2002 x 5263: optimal, 13951 it/s |
+| G1.4 Sprint 1 tests | green (see CI) |
+| G1.5 ASan + UBSan | clean |

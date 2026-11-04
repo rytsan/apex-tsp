@@ -66,3 +66,6 @@ target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
 target_link_libraries(engine_tests PRIVATE apex_core)
 add_test(NAME engine_tests COMMAND engine_tests)
+
+add_executable(lp_bench tools/lp_bench.cpp)
+target_link_libraries(lp_bench PRIVATE apex_core)
