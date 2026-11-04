@@ -117,7 +117,7 @@ Mode is selected via CLI (`--mode exact|scalable`) and reported in telemetry.
   the target platform, document the workaround (partial trimming or CPU-render fallback) — the
   requirement is LOD and fluidity, not the graphics API.
 - **Tests:** `doctest` (header-only) for C++; `xUnit` for C#.
-- **Reference hardware** (mandatory context in every benchmark): x86-64 CPU with >= 8 physical
+- **Reference hardware** (mandatory context in every benchmark): x86-64 CPU with >= 4 physical
   cores, dual-channel memory, NVMe SSD, no GPU required by the engine. Benchmark numbers without
   this context are void.
 

@@ -164,3 +164,17 @@ sprint N, but code exists):
   UB-only and must never feed pruning.
 - **Plan B** — Held-Karp Lagrangian bound replacing the native LP as primary LB if the LP
   performance gate fails (MASTER §8.3).
+
+---
+
+## 9. Operator decisions log
+
+Approved deviations from the original kit (README §4: refinements are recorded here).
+
+| Date | Decision | Affected |
+|---|---|---|
+| 2026-11-04 | Reference values corrected per TSP-BEST.html: fl3795 = 28772, d18512 = 645238; numbers written without thousands separators | MASTER §7, all sprint gates |
+| 2026-11-04 | `CEIL_2D` supported for pla85900 (`ceil2d`, same double/exact-sqrt rules) | MASTER §2.1, §5.3, M0.1 |
+| 2026-11-04 | `DISPLAY_DATA_SECTION`-only instances rejected with a clear error | M0.1 |
+| 2026-11-04 | Reference hardware lowered to >= 4 physical cores | MASTER §3 |
+| 2026-11-04 | `.github/` at repo root (GitHub Actions requirement), not under `engine/` | MASTER §3 layout |
