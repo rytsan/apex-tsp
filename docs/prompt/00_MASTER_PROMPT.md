@@ -291,7 +291,7 @@ may optimality be declared.
 | zero | 1e-11 | reduced costs, duals |
 | pivot | 1e-5 | ratio test stability |
 | SEC violation | `2 - 1e-5` | separation threshold |
-| blossom violation | `x(E(S)) > (|S|-1)/2 + 1e-5` | odd |S| |
+| blossom violation | `x(delta(H)\T) - x(T) < 1 - |T| - 1e-5` | odd |T|, §6 |
 | integral rounding | 1e-6 | LB_int = ceil(z_LP - 1e-6) |
 | RCF eps | 0.5 | §5.5 |
 
@@ -305,10 +305,14 @@ may optimality be declared.
   because `x(delta({i,j})) = x(delta(i)) + x(delta(j)) - 2*x_ij = 2` and, for any S ⊇ {i,j},
   `x(delta(S)) = x(delta({i,j})) + x(delta(S∖{i,j}, V∖S)) >= 2`. (Prove this as a unit test;
   apply more aggressive Padberg–Rinaldi rules only if the brute-force property test passes.)
-- **Blossom / 2-matching:** for odd |S|, the inequality `x(E(S)) <= (|S|-1)/2` is violated when
-  `x(delta(S)) < |S| + 1 - 2*tol` (equivalent via `2|S| = 2*x(E(S)) + x(delta(S))`). Note:
-  the `x_ij = 1` shrinking that is safe for SECs is **not** automatically safe for blossoms —
-  the blossom separator works on the un-shrunken support graph or uses its own guarded rules.
+- **Blossom / 2-matching (corrected 2026-11-04, operator-approved):** handle H, odd set T of
+  tooth edges in delta(H): `x(E(H)) + x(T) <= |H| + (|T|-1)/2`, equivalently under degree
+  constraints `x(delta(H) \ T) - x(T) >= 1 - |T|`; violated when the left side is below
+  `1 - |T| - 1e-5`. Valid for every tour (x(delta(H)) of an integral 2-matching is even).
+  The earlier formula `x(E(S)) <= (|S|-1)/2` is the perfect-matching (degree 1) odd-set
+  constraint and is INVALID for the TSP (a tour through 3 consecutive nodes of S violates it).
+  Note: the `x_ij = 1` shrinking that is safe for SECs is **not** automatically safe for
+  blossoms — the blossom separator works on the un-shrunken support graph.
 - **Cut pool:** canonical hash (sorted node list for SEC; handle+teeth representation for
   blossom), dedup, aging (inactive cuts leave the LP back into the pool), parallel separation
   with deterministic merge.

@@ -51,17 +51,17 @@ bounded dual simplex, MPS/Netlib harness, CLI, checkpoint).
 
 ## M2.4 — Blossom / 2-matching heuristic separator (`src/cuts/blossom.{hpp,cpp}`)
 
-- Violation test (MASTER §6): for odd |S|, violated when
-  `x(E(S)) > (|S|-1)/2 + 1e-5` (equivalently `x(delta(S)) < |S| + 1 - 2e-5`).
-- Heuristic separation (own code): build the odd-degree-node graph on the support, compute a
-  **minimum-weight perfect matching** with your own Edmonds blossom implementation
-  (O(n^3) acceptable), lift the matching's odd-set cuts back to the original graph; verify the
-  violation before adding. Mark this routine `heuristic` (it may miss cuts; it must never add
-  invalid ones — every candidate cut is re-verified exactly against the LP row values).
-- Full Padberg–Rao separation with lifting is a stretch goal; guard it behind `--sep-blossom=full`.
-- Tests: `T_blossom_planted_violation` (planted odd-set violation detected on n <= 60),
-  `T_blossom_never_invalid` (fuzz: 1000 random support graphs — every emitted cut re-verified;
-  invalid emissions = failure).
+- Inequality (MASTER §6, corrected): handle H, odd tooth set T ⊆ delta(H):
+  `x(delta(H) \ T) - x(T) >= 1 - |T|`; violated when below `1 - |T| - 1e-5`.
+- Heuristic separation (default, marked `heuristic`): handles = connected components of the
+  fractional support for several thresholds (Padberg–Hong / Grötschel–Holland); optimal odd
+  tooth set per handle; every candidate re-verified exactly against the LP values.
+- Exact Padberg–Rao separation (minimum odd cut on the edge-split auxiliary graph, Gomory–Hu
+  tree via Gusfield) behind `--sep-blossom=full`.
+- Tests: `T_blossom_planted_violation` (planted violation detected on n <= 60),
+  `T_blossom_never_invalid` (fuzz: 1000 random support graphs — every emitted cut re-verified and
+  satisfied by random tours; invalid emissions = failure), `T_blossom_padberg_rao_exact`
+  (full mode matches brute force).
 
 ## M2.5 — Cut pool (`src/cuts/pool.{hpp,cpp}`)
 
