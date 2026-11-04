@@ -180,6 +180,7 @@ Approved deviations from the original kit (README §4: refinements are recorded 
 | 2026-11-04 | `DISPLAY_DATA_SECTION`-only instances rejected with a clear error | M0.1 |
 | 2026-11-04 | Reference hardware lowered to >= 4 physical cores | MASTER §3 |
 | 2026-11-04 | `.github/` at repo root (GitHub Actions requirement), not under `engine/` | MASTER §3 layout |
+| 2026-11-04 | Dual phase 1 by artificial bounds (Koberstein), **only** when the initial basis is not dual feasible (generic LPs such as Netlib). TSP LPs (c >= 0, 0 <= x <= 1) never trigger it; asserted by tests | M1.4 |
 
 ---
 

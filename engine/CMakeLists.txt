@@ -36,7 +36,8 @@ add_library(apex_core STATIC
     src/bnc/checkpoint.cpp
     src/lp/csc.cpp
     src/lp/lu.cpp
-    src/lp/eta.cpp)
+    src/lp/eta.cpp
+    src/lp/dual_simplex.cpp)
 target_include_directories(apex_core PUBLIC src)
 target_link_libraries(apex_core PUBLIC apex_warnings)
 
@@ -57,7 +58,8 @@ add_executable(engine_tests
     tests/test_app.cpp
     tests/test_csc.cpp
     tests/test_lu.cpp
-    tests/test_eta.cpp)
+    tests/test_eta.cpp
+    tests/test_dual_simplex.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
 target_link_libraries(engine_tests PRIVATE apex_core)
