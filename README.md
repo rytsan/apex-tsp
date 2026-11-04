@@ -1,5 +1,7 @@
 # APEX-TSP Prompt Kit — Agent Operating Instructions
 
+[![ci](https://github.com/rytsan/apex-tsp/actions/workflows/ci.yml/badge.svg)](https://github.com/rytsan/apex-tsp/actions/workflows/ci.yml)
+
 > **You are an AI agent.** If you were given this kit, this file is your operating manual.
 > Kit files live in `docs/prompt/`. Read it fully together with `00_MASTER_PROMPT.md` and exactly one sprint file (`01`–`06`)
 > before writing any code. The human operator should read §6 once.
