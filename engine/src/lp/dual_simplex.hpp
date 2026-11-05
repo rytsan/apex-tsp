@@ -55,6 +55,11 @@ struct SimplexResult {
     double solve_time_s = 0;
     bool used_artificial_bounds = false;
     bool perturbed = false;
+    // Status Infeasible from the dual ratio test: ray f over the rows. A column a (new or
+    // existing, at lower bound) can only restore feasibility if f^T a > 0; none exists => the
+    // LP stays infeasible after adding any such columns (Farkas pricing, MASTER §5.6).
+    std::vector<double> farkas;
+    uint32_t initial_dual_flips = 0;  // nonbasic moves needed to make the start dual feasible
 };
 
 // Bounded dual simplex: Devex/DSE pricing, Harris two-pass ratio test + BFRT,

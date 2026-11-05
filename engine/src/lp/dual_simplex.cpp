@@ -132,6 +132,8 @@ public:
             if (q < 0) {
                 clear_alpha();
                 if (enlarge_all_artificials()) { compute_primal(); continue; }
+                farkas_.assign(m_, 0.0);  // dual ray: no column j with s * rho^T a_j > 0 can repair row r
+                for (uint32_t i = 0; i < m_; ++i) farkas_[i] = s * rho[i];
                 return Status::Infeasible;  // dual unbounded
             }
 
@@ -339,6 +341,8 @@ public:
         res.solve_time_s = elapsed();
         res.used_artificial_bounds = used_art_;
         res.perturbed = perturbed_;
+        res.farkas = farkas_;
+        res.initial_dual_flips = initial_flips_;
         return res;
     }
 
@@ -465,6 +469,7 @@ private:
                 x_[j] = ub_[j];
             }
             moved = true;
+            if (initial) ++initial_flips_;
         }
         return moved;
     }
@@ -627,6 +632,8 @@ private:
     std::mt19937_64 rng_;
     Clock::time_point t0_;
     uint64_t it_ = 0, primal_it_ = 0, refacts_ = 0, bound_flips_ = 0;
+    std::vector<double> farkas_;
+    uint32_t initial_flips_ = 0;
     bool infeasible_bounds_ = false, used_art_ = false, perturbed_ = false, shifted_ = false, force_refactor_ = false;
 };
 

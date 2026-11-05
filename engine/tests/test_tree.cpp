@@ -1,0 +1,90 @@
+#include <doctest/doctest.h>
+
+#include <string>
+
+#include "bnc/tree.hpp"
+#include "core/tour_io.hpp"
+#include "geo/hilbert.hpp"
+#include "primal/two_opt.hpp"
+
+namespace {
+apex::Instance load(const std::string& name) {
+    return apex::read_tsplib(std::string(APEX_DATA_DIR) + "/" + name + ".tsp");
+}
+apex::Tour heuristic_tour(const apex::Instance& inst, const apex::CandidateGraph& g) {
+    auto t = apex::hilbert_tour(inst, apex::hilbert_order(inst));
+    apex::two_opt_oropt(t, inst, g, apex::TwoOptConfig{});
+    return t;
+}
+}  // namespace
+
+TEST_CASE("T_farkas_pricing_repairs_restricted_infeasibility") {
+    // Fixing all but one candidate edge at node 0 to zero makes the candidate LP infeasible
+    // (degree 2 impossible), but the complete graph is still feasible: Farkas pricing must add
+    // repairing columns instead of declaring the node infeasible.
+    const auto inst = load("eil51");
+    auto g = apex::build_candidate_graph(inst);
+    apex::RootLoopConfig cfg;
+    apex::CutLoop loop(inst, g, cfg);
+    apex::BoundChanges bc;
+    bool kept = false;
+    for (uint32_t k = g.adj_start[0]; k < g.adj_start[1]; ++k) {
+        if (!kept) { kept = true; continue; }
+        bc.push_back({g.adj[k], 0});
+    }
+    const size_t before = g.edges.size();
+    const auto r = loop.solve(bc, nullptr, apex::NodeLimits{});
+    CHECK_FALSE(r.infeasible);
+    CHECK(g.edges.size() > before);
+    CHECK(r.converged);
+    CHECK(std::isfinite(r.global_lb));
+
+    // Three edges at node 0 forced to 1: infeasible over the complete graph too.
+    apex::BoundChanges bad;
+    for (uint32_t k = g.adj_start[0]; k < g.adj_start[0] + 3; ++k) bad.push_back({g.adj[k], 1});
+    const auto r2 = loop.solve(bad, nullptr, apex::NodeLimits{});
+    CHECK(r2.infeasible);
+}
+
+TEST_CASE("T_bnc_proves_optimality_small") {
+    struct Ref { const char* name; int64_t opt; };
+    for (const auto& r : {Ref{"eil51", 426}, Ref{"berlin52", 7542}, Ref{"a280", 2579}}) {
+        CAPTURE(r.name);
+        const auto inst = load(r.name);
+        auto g = apex::build_candidate_graph(inst);
+        apex::BnCConfig cfg;
+        const auto res = apex::run_bnc(inst, g, cfg, heuristic_tour(inst, g));
+        CHECK(res.status == apex::BnCResult::Status::Optimal);
+        CHECK(res.ub == r.opt);
+        CHECK(res.lb_int == res.ub);
+        CHECK(apex::is_valid_tour(res.best, inst.n));
+        CHECK(apex::tour_cost(inst, res.best) == res.ub);  // certificate: recomputed with the metric
+        CHECK(res.warm_dual_infeasible == 0);
+        CHECK(res.root_lb <= r.opt + 1e-6);
+        MESSAGE(std::string(r.name) << " nodes=" << res.nodes << " branched=" << res.branched << " depth=" << res.max_depth
+                       << " root_lb=" << res.root_lb << " warm=" << res.warm_starts << " t=" << res.total_s);
+    }
+}
+
+TEST_CASE("T_bnc_time_limit_anytime") {
+    const auto inst = load("pr1002");
+    auto g = apex::build_candidate_graph(inst);
+    apex::BnCConfig cfg;
+    cfg.time_limit_s = 2.0;
+    const auto res = apex::run_bnc(inst, g, cfg, heuristic_tour(inst, g));
+    CHECK(res.lb <= 259045 + 1e-6);
+    CHECK(res.lb <= res.ub + 1e-6);
+    CHECK(apex::tour_cost(inst, res.best) == res.ub);
+    if (res.status != apex::BnCResult::Status::Optimal) CHECK(res.status == apex::BnCResult::Status::TimeLimit);
+}
+
+TEST_CASE("T_bnc_deterministic_order") {
+    const auto inst = load("eil51");
+    std::vector<uint32_t> first;
+    for (int run = 0; run < 2; ++run) {
+        auto g = apex::build_candidate_graph(inst);
+        const auto res = apex::run_bnc(inst, g, apex::BnCConfig{}, heuristic_tour(inst, g));
+        if (run == 0) first = res.processing_order;
+        else CHECK(res.processing_order == first);
+    }
+}

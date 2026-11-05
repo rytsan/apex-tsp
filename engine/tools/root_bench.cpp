@@ -8,6 +8,7 @@
 
 #include "app/telemetry.hpp"
 #include "bnc/root_loop.hpp"
+#include "bnc/tree.hpp"
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
 #include "primal/two_opt.hpp"
@@ -16,6 +17,7 @@ int main(int argc, char** argv) {
     try {
         std::string path;
         double ref = 0, time_limit = INFINITY;
+        bool tree = false, best_bound = false;
         apex::RootLoopConfig cfg;
         uint64_t seed = 1;
         for (int i = 1; i < argc; ++i) {
@@ -29,6 +31,8 @@ int main(int argc, char** argv) {
             else if (f == "--time-limit") time_limit = std::stod(val());
             else if (f == "--seed") seed = std::stoull(val());
             else if (f == "--no-blossom") cfg.use_blossom = false;
+            else if (f == "--tree") tree = true;
+            else if (f == "--best-bound") best_bound = true;
             else if (f == "--sep-blossom") {
                 const auto v = val();
                 if (v == "full") cfg.blossom.mode = apex::BlossomMode::Full;
@@ -53,6 +57,31 @@ int main(int argc, char** argv) {
         tel.event("root_start", {{"instance", inst.name}, {"n", std::to_string(inst.n)}, {"edges", std::to_string(g.edges.size())},
                                  {"ub_2opt", std::to_string(tour.cost)}, {"ref", std::to_string(static_cast<long long>(ref))},
                                  {"blossom", cfg.use_blossom ? (cfg.blossom.mode == apex::BlossomMode::Full ? "full" : "heuristic") : "off"}});
+        if (tree) {  // full branch-and-cut (Sprint 3)
+            apex::BnCConfig bc;
+            bc.root = cfg;
+            bc.time_limit_s = time_limit;
+            if (best_bound) bc.select = apex::BnCConfig::Select::BestBound;
+            const auto r = apex::run_bnc(inst, g, bc, tour, &tel);
+            std::printf("\nSUMMARY %s n=%u status=%s ub=%lld lb=%.4f lb_int=%lld gap=%.4f%% ref=%.0f\n", inst.name.c_str(), inst.n,
+                        apex::status_name(r.status), static_cast<long long>(r.ub), r.lb, static_cast<long long>(r.lb_int),
+                        100.0 * (r.ub - r.lb) / r.ub, ref);
+            std::printf("  certificate: ub == recomputed tour cost: %s   lb <= ref: %s   ub == ref: %s\n",
+                        apex::tour_cost(inst, r.best) == r.ub ? "OK" : "VIOLATED", r.lb <= ref + 1e-6 ? "OK" : "VIOLATED",
+                        r.ub == static_cast<int64_t>(ref) ? "yes" : "no");
+            std::printf("  root_lb=%.4f nodes=%llu branched=%llu pruned=%llu infeasible=%llu integral=%llu depth=%llu ub_improvements=%llu\n",
+                        r.root_lb, static_cast<unsigned long long>(r.nodes), static_cast<unsigned long long>(r.branched),
+                        static_cast<unsigned long long>(r.pruned), static_cast<unsigned long long>(r.infeasible),
+                        static_cast<unsigned long long>(r.integral), static_cast<unsigned long long>(r.max_depth),
+                        static_cast<unsigned long long>(r.ub_improvements));
+            std::printf("  warm=%llu cold=%llu warm_dual_infeasible=%llu  edges=%zu  rcf_root fixed0=%u fixed1=%u\n",
+                        static_cast<unsigned long long>(r.warm_starts), static_cast<unsigned long long>(r.cold_starts),
+                        static_cast<unsigned long long>(r.warm_dual_infeasible), g.edges.size(), r.root.rcf_fixed0, r.root.rcf_fixed1);
+            std::printf("  time: lp=%.2fs (%.1f%%) sep=%.2fs pricing=%.2fs total=%.2fs nodes/s=%.2f rss=%.1fMB\n", r.lp_s,
+                        100.0 * r.lp_s / std::max(1e-9, r.total_s), r.sep_s, r.pricing_s, r.total_s,
+                        r.nodes / std::max(1e-9, r.total_s), apex::peak_rss_bytes() / 1048576.0);
+            return r.lb <= ref + 1e-6 && apex::tour_cost(inst, r.best) == r.ub ? 0 : 1;
+        }
         const auto r = apex::run_root_loop(inst, g, cfg, &tel);
         std::printf("\nSUMMARY %s n=%u status=%s converged=%d tailing_off=%d rounds=%zu\n", inst.name.c_str(), inst.n,
                     apex::status_name(r.status), r.converged ? 1 : 0, r.tailing_off ? 1 : 0, r.rounds.size());
