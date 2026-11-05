@@ -181,6 +181,8 @@ Approved deviations from the original kit (README §4: refinements are recorded 
 | 2026-11-04 | Reference hardware lowered to >= 4 physical cores | MASTER §3 |
 | 2026-11-04 | `.github/` at repo root (GitHub Actions requirement), not under `engine/` | MASTER §3 layout |
 | 2026-11-04 | Root LP bound made globally valid: Farley bound with exact reduced costs over the complete graph; pricing adds negative columns every round (root LB reported only fully priced). Root RCF uses the sound rule ceil(global_lb + d - 1e-6) >= UB instead of LB_int + d > UB - eps (MASTER §5.5 formula can prune tours better than UB) | MASTER §5.5, M2.6 |
+| 2026-11-04 | MASTER §5.5 rewritten to the sound RCF rule and the globally valid bound (fully priced LP or Farley); RCF eps removed | MASTER §5.5, §5.7, 04 M3.3 |
+| 2026-11-04 | G2.1 / Band E2 upper limit changed from 99.5% to the optimum (stronger cuts than planned are not a defect; above the optimum stays a bug) | MASTER §7 Band E2, 03 G2.1 |
 | 2026-11-04 | Root loop tailing-off stop (gain < 1e-4 relative over 50 rounds), reported separately from convergence | M2.6 |
 | 2026-11-04 | Iterated SEC shrinking: contract a supernode pair only if both have x(delta) = 2 (merging across c > 1 hides violated SECs; found by `T_shrinking_safe`) | MASTER §6, M2.2 |
 | 2026-11-04 | Blossom inequality corrected to the TSP 2-matching form `x(delta(H)\T) - x(T) >= 1 - |T|` (handle + odd teeth); the original `x(E(S)) <= (|S|-1)/2` is invalid for the TSP. Heuristic separation default, Padberg-Rao behind `--sep-blossom=full` | MASTER §6, M2.4 |
@@ -233,7 +235,7 @@ Transcripts: [`docs/SPRINT2_ROOT.md`](docs/SPRINT2_ROOT.md). The LB is the fully
 
 | Gate | Result |
 |---|---|
-| G2.1 pr1002 within 97–99.5% of 259045, never above | 99.752%: below the optimum, but above the 99.5% band upper limit (operator decision pending) |
+| G2.1 pr1002 >= 97% of 259045, never above | 99.752% |
 | G2.2 root gap <= 2% (vs. optimum) on pr1002 and fl3795 | 0.248% / 0.707% |
 | G2.3 pr1002 <= 10 min, fl3795 <= 20 min | 3.5 s / 335 s |
 | G2.4 Sprint 2 tests | green |

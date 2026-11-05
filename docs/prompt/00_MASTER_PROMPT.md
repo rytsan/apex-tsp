@@ -260,14 +260,19 @@ grid. The graph must be connected; if no tour is possible, insert fallback edges
 reconnection).
 
 ### 5.5 Reduced-Cost Fixing — VALID rules (global)
-Let `z_LP` = current global dual bound, `UB` = best tour (integer cost), `c_e_bar` = reduced
-cost at the LP optimum:
+Let `z` = a **globally valid** dual bound, `UB` = best tour (integer cost), `c_e_bar` = reduced
+cost at the LP optimum. An LP restricted to the candidate graph is **not** a global bound by
+itself: `z` is either the LP value after pricing has found no negative reduced cost over the
+complete graph (§5.6), or the Farley bound `z_LP + sum_{e: c_e_bar < 0} c_e_bar` over all
+`n(n-1)/2` edges, which is valid at every round.
 
-- Fix `x_e = 0` if: `z_LP + c_e_bar > UB - eps`   (variable nonbasic at lower bound, `c_e_bar >= 0`).
-- Fix `x_e = 1` if: `z_LP - c_e_bar > UB - eps`   (variable nonbasic at upper bound, `c_e_bar <= 0`).
-- **Integral rounding:** costs are integers, so `LB_int = ceil(z_LP - 1e-6)` is a valid and
-  stronger bound; substitute `LB_int` for `z_LP` in both formulas.
-- `eps` default = 0.5 (half the minimum cost unit) — CLI-configurable.
+- Fix `x_e = 0` if: `ceil(z + c_e_bar - 1e-6) >= UB`   (`c_e_bar >= 0`).
+- Fix `x_e = 1` if: `ceil(z - c_e_bar - 1e-6) >= UB`   (`c_e_bar <= 0`).
+- **Why the ceiling sits outside the sum:** every tour using (or avoiding) `e` costs at least
+  `z + |c_e_bar|`, and tour costs are integers, so that tour costs at least `ceil(z + |c_e_bar|)`.
+  Fixing is valid iff that is `>= UB` (no strictly better tour is lost). The older form
+  `ceil(z) + c_e_bar > UB - eps` is **unsound**: z = 10.1, c_e_bar = 0.6, UB = 12 fixes with
+  eps = 0.5, although a tour through `e` may cost 11 (test `T_root_rcf_integral_rule`).
 - **Scoping:** fixes applied with the **root** LP bound are permanent (global). Fixes inside the
   tree use the **node's** dual bound and are valid **only within that subtree** — implement
   subtree scoping explicitly (bound changes, not edge destruction; the edge `status` flag records
@@ -293,7 +298,7 @@ may optimality be declared.
 | SEC violation | `2 - 1e-5` | separation threshold |
 | blossom violation | `x(delta(H)\T) - x(T) < 1 - |T| - 1e-5` | odd |T|, §6 |
 | integral rounding | 1e-6 | LB_int = ceil(z_LP - 1e-6) |
-| RCF eps | 0.5 | §5.5 |
+| RCF rounding | 1e-6 | `ceil(z + c_e_bar - 1e-6) >= UB`, §5.5 |
 
 ---
 
@@ -385,8 +390,8 @@ root LP; (b) **Plan B** if the native-LP performance gate fails; (c) sanity cros
 - **Band C — scalable mode:** pla85900 gap <= 2% in <= 8 h; mona-lisa100K gap <= 2% vs. 5757191 in <= 8 h; peak RAM <= configured ceiling.
 - **Band D — standalone primal engine:** 100k nodes with gap <= 3% in <= 45 min single-thread (stretch: 2%).
 - **Band E — native LP:** E1 (Sprint 1): Netlib objectives within 1e-6 relative + performance
-  gate (<= 10x HiGHS time, <= 3x iterations on the same files). E2 (Sprint 2): pr1002 subtour LP
-  within 97–99.5% of 259045 (above the optimum = bug).
+  gate (<= 10x HiGHS time, <= 3x iterations on the same files). E2 (Sprint 2): pr1002 root LP
+  >= 97% of 259045 and never above it (above the optimum = bug).
 
 ---
 

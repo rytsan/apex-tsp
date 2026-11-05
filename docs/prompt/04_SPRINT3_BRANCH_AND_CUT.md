@@ -37,12 +37,12 @@ checkpoint v2).
 ## M3.3 — Reduced-cost fixing (`src/bnc/rcf.{hpp,cpp}`)
 
 - Implement MASTER §5.5 exactly, with the two scoping levels:
-  - **Root level:** fixes with the root `LB_int` are permanent; update edge `status` flags and
+  - **Root level:** fixes with the root global bound (fully priced or Farley) are permanent; update edge `status` flags and
     log counts (`pruned_edges_rcf`).
-  - **Node level:** fixes with the node's `LB_int` are stored in the node's `BoundChanges`
+  - **Node level:** fixes with the node's globally valid bound are stored in the node's `BoundChanges`
     and valid only in the subtree; they are applied/restored with the bound-change list.
-- Both rules (`x_e = 0` and `x_e = 1` fixing) implemented; integral rounding `LB_int =
-  ceil(z_LP - 1e-6)` used everywhere.
+- Both rules (`x_e = 0` and `x_e = 1` fixing) implemented with the sound rounding of MASTER §5.5:
+  `ceil(z + |c_e_bar| - 1e-6) >= UB`.
 - Re-run RCF after every UB improvement (queue a cheap pass at the next node boundary).
 - Tests: **`T_rcf_never_prunes_optimal_edge`** — for >= 20 small instances (n <= 11, brute-force
   optimal tour known), run the root LP + RCF with UB = optimal and assert no optimal-tour edge

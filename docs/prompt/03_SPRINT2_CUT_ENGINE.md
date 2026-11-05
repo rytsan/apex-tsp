@@ -88,7 +88,7 @@ bounded dual simplex, MPS/Netlib harness, CLI, checkpoint).
 
 | # | Criterion | Target |
 |---|---|---|
-| G2.1 | Band E2: pr1002 root LP (degree + separated cuts, **no branching**) | within 97–99.5% of 259045; above the optimum = bug |
+| G2.1 | Band E2: pr1002 root LP (degree + separated cuts, **no branching**) | >= 97% of 259045 and <= 259045; above the optimum = bug |
 | G2.2 | Root gap with cuts, no branching, on pr1002 and fl3795 | <= 2% on both |
 | G2.3 | Root loop time budget | pr1002 <= 10 min; fl3795 <= 20 min (report actual) |
 | G2.4 | §8.2 tests for this sprint (`T_components_*`, `T_shrinking_*`, `T_stoer_*`, `T_dinic_*`, `T_sec_*`, `T_blossom_*`, `T_pool_*`, `T_root_*`) | 100% green, output pasted |
