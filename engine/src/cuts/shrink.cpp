@@ -62,7 +62,7 @@ ShrunkGraph shrink_unit_edges(const SupportGraph& g, double tol) {
         for (const auto& [a, b, c] : agg) { deg[a] += c; deg[b] += c; }
         // Merge a matching of eligible pairs: c >= 1 and BOTH degrees == 2. Disjoint merges do
         // not change each other's degrees or capacities, so each stays safe.
-        std::fill(busy.begin(), busy.end(), 0);
+        std::fill(busy.begin(), busy.end(), uint8_t{0});
         bool merged = false;
         for (const auto& [a, b, c] : agg) {
             if (c < 1.0 - tol || busy[a] || busy[b]) continue;

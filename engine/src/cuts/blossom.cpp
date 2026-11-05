@@ -150,7 +150,7 @@ std::vector<BlossomCut> separate_blossom(const SupportGraph& g, const BlossomCon
         for (uint32_t s = 1; s < N; ++s) {
             const auto cut = dinic.min_cut_between(s, parent[s]);
             flow[s] = cut.value;
-            std::fill(side.begin(), side.end(), 0);
+            std::fill(side.begin(), side.end(), uint8_t{0});
             for (uint32_t v : cut.side) side[v] = 1;
             for (uint32_t t = s + 1; t < N; ++t)
                 if (side[t] && parent[t] == parent[s]) parent[t] = s;
