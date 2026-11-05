@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <istream>
 #include <mutex>
+#include <ostream>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -37,6 +39,16 @@ struct PoolStats {
 class CutPool {
 public:
     explicit CutPool(uint32_t age_limit = 10) : age_limit_(age_limit) {}
+    // Copy (tree workers start from a snapshot); staging must be empty, the mutex is not copied.
+    CutPool(const CutPool& o)
+        : age_limit_(o.age_limit_), cuts_(o.cuts_), by_hash_(o.by_hash_), next_id_(o.next_id_), stats_(o.stats_) {}
+    CutPool& operator=(const CutPool&) = delete;
+
+    // Index of an identical cut, inserting a copy (lp_row = -1) if absent (worker merge).
+    size_t add_or_find(const PoolCut& c);
+    // Checkpoint v2: exact state (cuts incl. lp_row / aging, ids, stats).
+    void save(std::ostream& o) const;
+    void load(std::istream& in);
 
     void stage_sec(const SecCut& c);          // thread-safe
     void stage_blossom(const BlossomCut& c);  // thread-safe

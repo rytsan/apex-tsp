@@ -17,7 +17,9 @@ int main(int argc, char** argv) {
     try {
         std::string path;
         double ref = 0, time_limit = INFINITY;
-        bool tree = false, best_bound = false;
+        bool tree = false, best_bound = false, resume = false;
+        uint32_t parallel_lps = 1;
+        std::string checkpoint;
         apex::RootLoopConfig cfg;
         uint64_t seed = 1;
         for (int i = 1; i < argc; ++i) {
@@ -33,6 +35,9 @@ int main(int argc, char** argv) {
             else if (f == "--no-blossom") cfg.use_blossom = false;
             else if (f == "--tree") tree = true;
             else if (f == "--best-bound") best_bound = true;
+            else if (f == "--parallel-lps") parallel_lps = static_cast<uint32_t>(std::stoul(val()));
+            else if (f == "--checkpoint") checkpoint = val();
+            else if (f == "--resume") resume = true;
             else if (f == "--sep-blossom") {
                 const auto v = val();
                 if (v == "full") cfg.blossom.mode = apex::BlossomMode::Full;
@@ -62,6 +67,10 @@ int main(int argc, char** argv) {
             bc.root = cfg;
             bc.time_limit_s = time_limit;
             if (best_bound) bc.select = apex::BnCConfig::Select::BestBound;
+            bc.parallel_lps = parallel_lps;
+            bc.checkpoint_dir = checkpoint;
+            bc.resume = resume;
+            bc.seed = seed;
             const auto r = apex::run_bnc(inst, g, bc, tour, &tel);
             std::printf("\nSUMMARY %s n=%u status=%s ub=%lld lb=%.4f lb_int=%lld gap=%.4f%% ref=%.0f\n", inst.name.c_str(), inst.n,
                         apex::status_name(r.status), static_cast<long long>(r.ub), r.lb, static_cast<long long>(r.lb_int),
@@ -80,6 +89,8 @@ int main(int argc, char** argv) {
             std::printf("  heuristic calls=%llu time=%.2fs   strong branching: candidates=%llu pivots=%llu max_per_node=%llu\n",
                         static_cast<unsigned long long>(r.heuristic_calls), r.heuristic_s, static_cast<unsigned long long>(r.strong_candidates), static_cast<unsigned long long>(r.strong_pivots),
                         static_cast<unsigned long long>(r.max_node_strong_pivots));
+            std::printf("  parallel_lps=%u batches=%llu checkpoints=%llu\n", parallel_lps,
+                        static_cast<unsigned long long>(r.batches), static_cast<unsigned long long>(r.checkpoints_written));
             std::printf("  time: lp=%.2fs (%.1f%%) sep=%.2fs pricing=%.2fs total=%.2fs nodes/s=%.2f rss=%.1fMB\n", r.lp_s,
                         100.0 * r.lp_s / std::max(1e-9, r.total_s), r.sep_s, r.pricing_s, r.total_s,
                         r.nodes / std::max(1e-9, r.total_s), apex::peak_rss_bytes() / 1048576.0);

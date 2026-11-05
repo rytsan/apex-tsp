@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 
+#include "core/serial.hpp"
+
 namespace apex {
 
 void Pseudocosts::observe(uint32_t e, int dir, double gain_per_unit) {
@@ -20,6 +22,29 @@ void Pseudocosts::observe(uint32_t e, int dir, double gain_per_unit) {
 double Pseudocosts::get(uint32_t e, int dir) const {
     if (count(e, dir) > 0) return sum_[dir][e] / cnt_[dir][e];
     return total_cnt_[dir] > 0 ? total_[dir] / static_cast<double>(total_cnt_[dir]) : 1.0;
+}
+
+void Pseudocosts::save(std::ostream& o) const {
+    using namespace serial;
+    tag(o, "pseudocosts");
+    for (int d = 0; d < 2; ++d) {
+        put_vec(o, sum_[d]);
+        put_vec(o, cnt_[d]);
+        put(o, total_[d]);
+        put(o, total_cnt_[d]);
+        o << '\n';
+    }
+}
+
+void Pseudocosts::load(std::istream& in) {
+    using namespace serial;
+    expect(in, "pseudocosts");
+    for (int d = 0; d < 2; ++d) {
+        sum_[d] = get_vec<double>(in);
+        cnt_[d] = get_vec<uint32_t>(in);
+        total_[d] = serial::get<double>(in);
+        total_cnt_[d] = serial::get<uint64_t>(in);
+    }
 }
 
 BranchDecision select_branch(Lp& lp, const Basis& basis, const SimplexResult& res, const SimplexOptions& opt,

@@ -10,6 +10,7 @@
 #include <unordered_set>
 
 #include "bnc/rcf.hpp"
+#include "core/serial.hpp"
 #include "cuts/support.hpp"
 
 namespace apex {
@@ -50,6 +51,40 @@ double farley_bound(EdgePricer& pricer, PricingMode mode, const Instance& inst, 
 
 CutLoop::CutLoop(const Instance& inst, CandidateGraph& g, const RootLoopConfig& cfg, TelemetrySink* tel)
     : inst_(inst), g_(g), cfg_(cfg), tel_(tel), pool_(cfg.age_limit), pricer_(inst) {
+    build_lp();
+}
+
+CutLoop::CutLoop(const CutLoop& o, CandidateGraph& g)
+    : inst_(o.inst_), g_(g), cfg_(o.cfg_), tel_(nullptr), pool_(o.pool_), pricer_(o.pricer_), active_(o.active_),
+      basis_(o.basis_), warm_(o.warm_) {
+    build_lp();
+}
+
+void CutLoop::save(std::ostream& o) const {
+    using namespace serial;
+    pool_.save(o);
+    tag(o, "loop");
+    put_vec(o, std::vector<uint64_t>(active_.begin(), active_.end()));
+    std::vector<uint8_t> col, row;
+    for (auto s : basis_.col) col.push_back(static_cast<uint8_t>(s));
+    for (auto s : basis_.row) row.push_back(static_cast<uint8_t>(s));
+    put_vec(o, col);
+    put_vec(o, row);
+    put(o, warm_);
+    o << '\n';
+}
+
+void CutLoop::load(std::istream& in) {
+    using namespace serial;
+    pool_.load(in);
+    expect(in, "loop");
+    const auto a = get_vec<uint64_t>(in);
+    active_.assign(a.begin(), a.end());
+    basis_.col.clear();
+    basis_.row.clear();
+    for (auto s : get_vec<uint8_t>(in)) basis_.col.push_back(static_cast<VarState>(s));
+    for (auto s : get_vec<uint8_t>(in)) basis_.row.push_back(static_cast<VarState>(s));
+    warm_ = get<bool>(in);
     build_lp();
 }
 
@@ -143,8 +178,9 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
     RootLoopResult out;
     bc_ = bc;
     if (warm) adopt(*warm);
-    if (lp_.c.size() != g_.edges.size()) build_lp();  // columns priced in by a call that stopped early
-    apply_bounds();
+    // Fresh LP every call: the matrix depends only on (graph, active rows), so a run resumed from
+    // a checkpoint solves bit-identical LPs (also covers columns priced in by an early stop).
+    build_lp();
     double prev_obj = -INFINITY;
     bool added_columns = false;  // previous round added priced columns (LP value may drop)
 

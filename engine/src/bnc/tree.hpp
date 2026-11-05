@@ -35,6 +35,15 @@ struct BnCConfig {
     std::string tour_path;                         // .tour rewritten atomically on every UB improvement
     double time_limit_s = INFINITY;                // --time-limit (anytime: in-flight node finishes)
     uint64_t max_nodes = UINT64_MAX;
+    // Checkpoint v2 (M3.6): <dir>/LATEST names the current v2-<seq>/ snapshot (manifest + files).
+    std::string checkpoint_dir;                    // --checkpoint
+    double checkpoint_every_s = 300;               // also written whenever the run stops early
+    bool resume = false;                           // --resume: continue from checkpoint_dir (initial tour ignored)
+    uint64_t seed = 1;                             // recorded in the manifest
+    // Parallel tree (M3.6): nodes processed in deterministic batches of parallel_lps workers, each on
+    // a snapshot of the shared state, merged in worker order. 1 = serial. Capped at 2 in Sprint 3.
+    uint32_t parallel_lps = 1;                     // --parallel-lps
+    uint64_t ram_cap_bytes = uint64_t(2) << 30;    // peak RSS asserted below this with parallel_lps > 1
     BnCConfig() {
         node.max_rounds = 100;
         node.tailing_window = 10;
@@ -61,6 +70,8 @@ struct BnCResult {
     double root_lb = -INFINITY, lp_s = 0, sep_s = 0, pricing_s = 0, total_s = 0;
     RootLoopResult root;
     std::vector<uint32_t> processing_order;  // node ids in processing order (determinism tests)
+    uint64_t checkpoints_written = 0, batches = 0;
+    double elapsed_s = 0;            // wall clock accumulated across resumed runs
 };
 
 // Integral LP solution that is a single Hamiltonian cycle on the LP columns => tour; else empty.

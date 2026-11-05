@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <istream>
+#include <ostream>
 #include <vector>
 
 #include "lp/dual_simplex.hpp"
@@ -23,6 +25,8 @@ public:
     uint32_t count(uint32_t e, int dir) const { return e < cnt_[dir].size() ? cnt_[dir][e] : 0; }
     // Mean for e; the global mean of that direction when e has no observation (1 if none at all).
     double get(uint32_t e, int dir) const;
+    void save(std::ostream& o) const;
+    void load(std::istream& in);
 
 private:
     std::vector<double> sum_[2];

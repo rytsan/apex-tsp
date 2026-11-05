@@ -102,6 +102,14 @@ struct NodeLimits {
 class CutLoop {
 public:
     CutLoop(const Instance& inst, CandidateGraph& g, const RootLoopConfig& cfg, TelemetrySink* tel = nullptr);
+    // Snapshot of `o` bound to `g` (a copy of o's graph): tree workers; no telemetry.
+    CutLoop(const CutLoop& o, CandidateGraph& g);
+    CutLoop(const CutLoop&) = delete;
+    CutLoop& operator=(const CutLoop&) = delete;
+    // Checkpoint v2: pool, active rows, basis (the LP is rebuilt from the graph on load).
+    void save(std::ostream& o) const;
+    void load(std::istream& in);
+    CutPool& pool_mut() { return pool_; }
     // bc: node bounds on top of the edge-status bounds. warm: start basis (nullptr: current).
     RootLoopResult solve(const BoundChanges& bc, const NodeBasis* warm, const NodeLimits& lim);
     NodeBasis basis() const { return {basis_, active_}; }

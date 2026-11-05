@@ -4,6 +4,8 @@
 #include <cmath>
 #include <tuple>
 
+#include "core/serial.hpp"
+
 namespace apex {
 namespace {
 
@@ -130,6 +132,73 @@ std::vector<size_t> CutPool::violated_outside(const std::vector<Edge>& lp_edges,
     std::vector<size_t> out;
     for (const auto& p : v) out.push_back(p.second);
     return out;
+}
+
+size_t CutPool::add_or_find(const PoolCut& c) {
+    for (size_t i : by_hash_[c.hash])
+        if (same(cuts_[i], c)) return i;
+    PoolCut copy = c;
+    copy.lp_row = -1;
+    copy.inactive_rounds = 0;
+    const size_t idx = cuts_.size();
+    insert(std::move(copy));
+    return idx;
+}
+
+void CutPool::save(std::ostream& o) const {
+    using namespace serial;
+    tag(o, "pool");
+    put(o, age_limit_);
+    put(o, next_id_);
+    put(o, stats_.inserted);
+    put(o, stats_.duplicates);
+    put(o, stats_.aged_out);
+    put(o, stats_.reactivated);
+    put(o, static_cast<uint64_t>(cuts_.size()));
+    o << '\n';
+    for (const auto& c : cuts_) {
+        put(o, static_cast<uint8_t>(c.kind));
+        put(o, c.hash);
+        put(o, c.id);
+        put(o, c.lp_row);
+        put(o, c.inactive_rounds);
+        put_vec(o, c.nodes);
+        put(o, static_cast<uint64_t>(c.teeth.size()));
+        for (const auto& [u, v] : c.teeth) { put(o, u); put(o, v); }
+        o << '\n';
+    }
+}
+
+void CutPool::load(std::istream& in) {
+    using namespace serial;
+    expect(in, "pool");
+    age_limit_ = get<uint32_t>(in);
+    next_id_ = get<uint64_t>(in);
+    stats_ = PoolStats{};
+    stats_.inserted = get<uint64_t>(in);
+    stats_.duplicates = get<uint64_t>(in);
+    stats_.aged_out = get<uint64_t>(in);
+    stats_.reactivated = get<uint64_t>(in);
+    const auto n = get<uint64_t>(in);
+    cuts_.clear();
+    by_hash_.clear();
+    for (uint64_t k = 0; k < n; ++k) {
+        PoolCut c;
+        c.kind = static_cast<CutKind>(get<uint8_t>(in));
+        c.hash = get<uint64_t>(in);
+        c.id = get<uint64_t>(in);
+        c.lp_row = get<int32_t>(in);
+        c.inactive_rounds = get<uint32_t>(in);
+        c.nodes = get_vec<uint32_t>(in);
+        const auto t = get<uint64_t>(in);
+        for (uint64_t i = 0; i < t; ++i) {
+            const auto u = get<uint32_t>(in);
+            c.teeth.push_back({u, get<uint32_t>(in)});
+        }
+        if (hash_of(c) != c.hash) throw std::runtime_error("checkpoint: pool cut hash mismatch");
+        by_hash_[c.hash].push_back(cuts_.size());
+        cuts_.push_back(std::move(c));
+    }
 }
 
 PoolStats CutPool::stats() const {
