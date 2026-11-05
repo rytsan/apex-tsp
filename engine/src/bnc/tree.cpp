@@ -1,6 +1,8 @@
 #include "bnc/tree.hpp"
 
 #include "bnc/rcf.hpp"
+#include "core/tour_io.hpp"
+#include "primal/lp_tour.hpp"
 
 #include <algorithm>
 #include <array>
@@ -72,6 +74,7 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
     out.best = std::move(initial);
     out.best.cost = tour_cost(inst, out.best);
     out.ub = out.best.cost;
+    if (!cfg.tour_path.empty()) write_tour_file(cfg.tour_path, inst, out.best, "apex_tsp initial ub " + std::to_string(out.ub));
     CutLoop loop(inst, g, cfg.root, tel);
     auto accumulate = [&](const RootLoopResult& r) {
         out.lp_s += r.lp_s;
@@ -79,19 +82,37 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
         out.pricing_s += r.pricing_s;
     };
     bool found_integral = false;
-    bool rcf_pending = false;  // UB improved: re-run root RCF at the next node boundary
+    bool rcf_pending = false;
+    bool dive_over = false;    // dive depth limit reached  // UB improved: re-run root RCF at the next node boundary
+    // Every UB candidate goes through here: cost recomputed with the metric (never the LP sum),
+    // the .tour file rewritten atomically on each improvement.
+    auto offer = [&](Tour t, uint32_t node_id, const char* source) {
+        if (!is_valid_tour(t, inst.n)) return;
+        t.cost = tour_cost(inst, t);
+        if (t.cost >= out.ub) return;
+        out.ub = t.cost;
+        out.best = std::move(t);
+        ++out.ub_improvements;
+        rcf_pending = true;
+        if (!cfg.tour_path.empty())
+            write_tour_file(cfg.tour_path, inst, out.best, "apex_tsp " + std::string(source) + " ub " + std::to_string(out.ub));
+        if (tel) tel->event("ub_improved", {{"node", std::to_string(node_id)}, {"ub", std::to_string(out.ub)}, {"source", source}});
+    };
     auto try_tour = [&](const RootLoopResult& r, uint32_t node_id) {
-        if (r.infeasible || !integral(r.final.x)) return false;
+        if (r.infeasible) return false;
+        if (!integral(r.final.x)) {
+            if (cfg.lp_heuristic) {  // heuristic (UB only): greedy by x + 2-opt/Or-opt
+                const auto th = Clock::now();
+                offer(lp_guided_tour(inst, g, r.final.x), node_id, "lp_guided");
+                out.heuristic_s += secs(th);
+                ++out.heuristic_calls;
+            }
+            return false;
+        }
         auto t = extract_tour(inst, g, r.final.x);
         if (t.order.empty()) return false;
         found_integral = true;
-        if (t.cost < out.ub) {
-            out.ub = t.cost;
-            out.best = std::move(t);
-            ++out.ub_improvements;
-            rcf_pending = true;
-            if (tel) tel->event("ub_improved", {{"node", std::to_string(node_id)}, {"ub", std::to_string(out.ub)}, {"source", "lp_integral"}});
-        }
+        offer(std::move(t), node_id, "lp_integral");
         return true;
     };
 
@@ -173,7 +194,7 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
                                         {"pruned_edges_rcf", std::to_string(out.root.rcf_fixed0)}});
         }
         size_t pick = open.size() - 1;  // dive: last pushed
-        if (found_integral || cfg.select == BnCConfig::Select::BestBound) {
+        if (found_integral || dive_over || cfg.select == BnCConfig::Select::BestBound) {
             for (size_t k = 0; k < open.size(); ++k)  // ponytail: O(open) scan; heap if fronts grow past ~1e5
                 if (open[k].dual_bound < open[pick].dual_bound ||
                     (open[k].dual_bound == open[pick].dual_bound && open[k].id < open[pick].id))
@@ -184,6 +205,7 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
         if (prunable(node.dual_bound, out.ub)) { ++out.pruned; continue; }
         ++out.nodes;
         out.max_depth = std::max<uint64_t>(out.max_depth, node.depth);
+        if (node.depth >= cfg.dive_depth_limit) dive_over = true;  // dive went too deep: best-bound from now on
         out.processing_order.push_back(node.id);
         NodeLimits lim = cfg.node;
         lim.cutoff = out.ub;

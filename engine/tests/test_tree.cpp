@@ -1,10 +1,12 @@
 #include <doctest/doctest.h>
 
+#include <filesystem>
 #include <string>
 
 #include "bnc/tree.hpp"
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
+#include "primal/lp_tour.hpp"
 #include "primal/two_opt.hpp"
 
 namespace {
@@ -142,4 +144,61 @@ TEST_CASE("T_strong_branching_budget") {
         CHECK(lp.lower == lower);
         CHECK(lp.upper == upper);
     }
+}
+
+TEST_CASE("T_extract_tour") {
+    const auto inst = load("eil51");
+    const auto opt = apex::read_tour(std::string(APEX_DATA_DIR) + "/eil51.opt.tour", inst);
+    apex::CandidateGraph g;
+    g.n = inst.n;
+    for (size_t k = 0; k < opt.order.size(); ++k) {  // the optimal cycle, then a chord
+        const uint32_t a = opt.order[k], b = opt.order[(k + 1) % opt.order.size()];
+        g.edges.push_back({std::min(a, b), std::max(a, b), apex::dist(inst, a, b), apex::kActive, 0.0});
+    }
+    std::vector<double> x(g.edges.size(), 1.0);
+    const auto t = apex::extract_tour(inst, g, x);
+    REQUIRE(t.order.size() == inst.n);
+    CHECK(t.cost == 426);
+    // Two subtours: drop two cycle edges and close both halves with chords => no tour.
+    const uint32_t h = inst.n / 2;
+    x[h - 1] = 0;
+    x[inst.n - 1] = 0;
+    g.edges.push_back({std::min(opt.order[0], opt.order[h - 1]), std::max(opt.order[0], opt.order[h - 1]), 0, apex::kActive, 0.0});
+    g.edges.push_back({std::min(opt.order[h], opt.order[inst.n - 1]), std::max(opt.order[h], opt.order[inst.n - 1]), 0, apex::kActive, 0.0});
+    x.push_back(1.0);
+    x.push_back(1.0);
+    CHECK(apex::extract_tour(inst, g, x).order.empty());
+}
+
+TEST_CASE("T_lp_guided_tour") {
+    // From the fractional root LP of pr1002 the guided tour must be a valid tour and beat the
+    // plain Hilbert + 2-opt start used as the initial UB.
+    const auto inst = load("pr1002");
+    auto g = apex::build_candidate_graph(inst);
+    const auto base = heuristic_tour(inst, g);
+    apex::RootLoopConfig cfg;
+    apex::CutLoop loop(inst, g, cfg);
+    const auto r = loop.solve({}, nullptr, apex::NodeLimits{});
+    const auto t = apex::lp_guided_tour(inst, g, r.final.x);
+    REQUIRE(apex::is_valid_tour(t, inst.n));
+    CHECK(t.cost == apex::tour_cost(inst, t));
+    CHECK(t.cost >= 259045);
+    CHECK(t.cost < base.cost);
+    MESSAGE("pr1002 lp_guided=" << t.cost << " hilbert+2opt=" << base.cost << " opt=259045");
+}
+
+TEST_CASE("T_bnc_tour_file_atomic") {
+    const auto inst = load("a280");
+    auto g = apex::build_candidate_graph(inst);
+    apex::BnCConfig cfg;
+    const auto path = (std::filesystem::temp_directory_path() / "apex_bnc_a280.tour").string();
+    std::filesystem::remove(path);
+    cfg.tour_path = path;
+    const auto res = apex::run_bnc(inst, g, cfg, heuristic_tour(inst, g));
+    REQUIRE(res.status == apex::BnCResult::Status::Optimal);
+    const auto t = apex::read_tour(path, inst);
+    CHECK(t.cost == res.ub);
+    CHECK(t.cost == 2579);
+    CHECK_FALSE(std::filesystem::exists(path + ".tmp"));
+    std::filesystem::remove(path);
 }

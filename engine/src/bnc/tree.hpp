@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "bnc/branching.hpp"
@@ -29,6 +30,9 @@ struct BnCConfig {
     enum class Select { DiveThenBest, BestBound } select = Select::DiveThenBest;  // --node-select
     NodeLimits node;                               // per-node cut loop limits (cutoff set by the tree)
     BranchingConfig branching;
+    bool lp_heuristic = true;                      // LP-guided tour at every fractional node (UB only)
+    uint32_t dive_depth_limit = 50;                // dive -> best-bound once a node this deep is processed
+    std::string tour_path;                         // .tour rewritten atomically on every UB improvement
     double time_limit_s = INFINITY;                // --time-limit (anytime: in-flight node finishes)
     uint64_t max_nodes = UINT64_MAX;
     BnCConfig() {
@@ -49,6 +53,8 @@ struct BnCResult {
     uint64_t warm_dual_infeasible = 0;
     uint64_t rcf_node_fixings = 0;     // node-scoped fixes passed to children
     uint64_t strong_pivots = 0, strong_candidates = 0, max_node_strong_pivots = 0;  // warm starts whose basis needed dual repair with unchanged columns (must stay 0)
+    uint64_t heuristic_calls = 0;
+    double heuristic_s = 0;
     double root_lb = -INFINITY, lp_s = 0, sep_s = 0, pricing_s = 0, total_s = 0;
     RootLoopResult root;
     std::vector<uint32_t> processing_order;  // node ids in processing order (determinism tests)

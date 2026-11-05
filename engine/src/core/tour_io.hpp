@@ -12,6 +12,7 @@ namespace apex {
 
 // TSPLIB .tour: node ids written as Instance::original_ids, terminated by -1.
 void write_tour(std::ostream& out, const Instance& inst, const Tour& tour, const std::string& comment = "");
+// Atomic: written to path + ".tmp", then renamed over path.
 void write_tour_file(const std::string& path, const Instance& inst, const Tour& tour, const std::string& comment = "");
 
 // Parses a .tour for inst; validates TYPE, DIMENSION and that the ids form a

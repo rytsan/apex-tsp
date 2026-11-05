@@ -2,6 +2,7 @@
 
 #include <charconv>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <istream>
 #include <ostream>
@@ -73,9 +74,13 @@ void write_tour(std::ostream& out, const Instance& inst, const Tour& tour, const
 }
 
 void write_tour_file(const std::string& path, const Instance& inst, const Tour& tour, const std::string& comment) {
-    auto f = open_out(path);
-    write_tour(f, inst, tour, comment);
-    if (!f.flush()) throw std::runtime_error(path + ": write failed");
+    const std::string tmp = path + ".tmp";
+    {
+        auto f = open_out(tmp);
+        write_tour(f, inst, tour, comment);
+        if (!f.flush()) throw std::runtime_error(tmp + ": write failed");
+    }
+    std::filesystem::rename(tmp, path);  // atomic replace: readers never see a partial tour
 }
 
 Tour parse_tour(std::istream& in, const Instance& inst, const std::string& src) {

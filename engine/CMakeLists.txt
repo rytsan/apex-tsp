@@ -33,6 +33,7 @@ add_library(apex_core STATIC
     src/geo/delaunay.cpp
     src/graph/candidate_graph.cpp
     src/primal/two_opt.cpp
+    src/primal/lp_tour.cpp
     src/bnc/checkpoint.cpp
     src/lp/csc.cpp
     src/lp/lu.cpp
