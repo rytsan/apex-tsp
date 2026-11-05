@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <string>
 
 #include "bnc/tree.hpp"
@@ -111,7 +112,11 @@ TEST_CASE("T_parallel_tree_deterministic") {
         const auto inst = load(name);
         apex::BnCConfig cfg;
         cfg.parallel_lps = 2;
-        const auto r1 = run(inst, cfg);
+        auto g = apex::build_candidate_graph(inst);
+        const auto r1 = apex::run_bnc(inst, g, cfg, heuristic_tour(inst, g));
+        std::set<std::pair<uint32_t, uint32_t>> pairs;
+        for (const auto& e : g.edges) pairs.insert({e.u, e.v});
+        CHECK(pairs.size() == g.edges.size());  // the merge never duplicates a column
         const auto r2 = run(inst, cfg);
         CHECK(r1.status == apex::BnCResult::Status::Optimal);
         CHECK(r1.processing_order == r2.processing_order);

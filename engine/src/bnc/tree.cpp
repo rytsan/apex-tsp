@@ -397,6 +397,7 @@ private:
             merge(res[w], gs[w], *loops[w], m0, p0);
             apply(res[w], true);
         }
+        loop_.reset_to(last_worker_basis_);  // rows found by the batch carry forward, as in the serial loop
         if (peak_rss_bytes() > cfg_.ram_cap_bytes)
             throw std::runtime_error("bnc: peak RSS above the parallel-lps memory cap (" + std::to_string(cfg_.ram_cap_bytes) + " bytes)");
         progress();
@@ -423,23 +424,25 @@ private:
         if (grew) rebuild_adjacency(g_);
         std::vector<size_t> cut(wl.pool().size());
         for (size_t k = 0; k < cut.size(); ++k) cut[k] = k < p0 ? k : loop_.pool_mut().add_or_find(wl.pool().at(k));
+        auto map_basis = [&](const NodeBasis& b) {
+            NodeBasis nb;
+            nb.basis.col.assign(g_.edges.size(), VarState::AtLower);
+            for (size_t j = 0; j < b.basis.col.size(); ++j) nb.basis.col[col[j]] = b.basis.col[j];
+            nb.basis.row = b.basis.row;
+            for (size_t k : b.active) nb.active.push_back(cut[k]);
+            return nb;
+        };
         std::map<const NodeBasis*, std::shared_ptr<const NodeBasis>> done;
         for (auto& c : o.children) {
             for (auto& b : c.bounds) b.edge = col[b.edge];
             if (c.branch_edge >= 0) c.branch_edge = col[static_cast<size_t>(c.branch_edge)];
             if (!c.parent_basis) continue;
             auto& mapped = done[c.parent_basis.get()];
-            if (!mapped) {
-                NodeBasis nb;
-                nb.basis.col.assign(g_.edges.size(), VarState::AtLower);
-                for (size_t j = 0; j < c.parent_basis->basis.col.size(); ++j) nb.basis.col[col[j]] = c.parent_basis->basis.col[j];
-                nb.basis.row = c.parent_basis->basis.row;
-                for (size_t k : c.parent_basis->active) nb.active.push_back(cut[k]);
-                mapped = std::make_shared<const NodeBasis>(std::move(nb));
-            }
+            if (!mapped) mapped = std::make_shared<const NodeBasis>(map_basis(*c.parent_basis));
             c.parent_basis = mapped;
         }
         for (auto& ob : o.obs) ob.edge = col[ob.edge];
+        last_worker_basis_ = map_basis(wl.basis());
     }
 
     // Applies an outcome to the master state; worker outcomes (merged) also carry pseudocost
@@ -682,6 +685,7 @@ private:
     Clock::time_point t0_, last_ckpt_;
     double elapsed0_ = 0;
     uint64_t last_progress_ = 0;
+    NodeBasis last_worker_basis_;
 };
 
 BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg, Tour initial, TelemetrySink* tel) {

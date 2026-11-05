@@ -60,6 +60,16 @@ CutLoop::CutLoop(const CutLoop& o, CandidateGraph& g)
     build_lp();
 }
 
+void CutLoop::reset_to(const NodeBasis& b) {
+    for (size_t idx : active_) pool_.set_lp_row(idx, -1);
+    active_ = b.active;
+    for (size_t k = 0; k < active_.size(); ++k) pool_.set_lp_row(active_[k], static_cast<int32_t>(inst_.n + k));
+    basis_ = b.basis;
+    basis_.col.resize(g_.edges.size(), VarState::AtLower);
+    warm_ = true;
+    build_lp();
+}
+
 void CutLoop::save(std::ostream& o) const {
     using namespace serial;
     pool_.save(o);

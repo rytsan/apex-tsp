@@ -110,6 +110,9 @@ public:
     void save(std::ostream& o) const;
     void load(std::istream& in);
     CutPool& pool_mut() { return pool_; }
+    // Replaces the active rows and basis (parallel tree: the master continues from a worker's
+    // final LP state, as the serial loop continues from its own).
+    void reset_to(const NodeBasis& b);
     // bc: node bounds on top of the edge-status bounds. warm: start basis (nullptr: current).
     RootLoopResult solve(const BoundChanges& bc, const NodeBasis* warm, const NodeLimits& lim);
     NodeBasis basis() const { return {basis_, active_}; }
