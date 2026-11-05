@@ -117,6 +117,7 @@ public:
     RootLoopResult solve(const BoundChanges& bc, const NodeBasis* warm, const NodeLimits& lim);
     NodeBasis basis() const { return {basis_, active_}; }
     const Lp& lp() const { return lp_; }
+    Lp& lp_mut() { return lp_; }  // strong branching changes bounds in place and restores them
     const CutPool& pool() const { return pool_; }
     // Columns present when `b` was taken equal the current ones (no pricing since).
     bool same_columns(const NodeBasis& b) const { return b.basis.col.size() == g_.edges.size(); }

@@ -138,8 +138,8 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
         o.children.push_back(std::move(node));
         return;
     }
-    Lp lp = loop.lp();
-    const auto d = select_branch(lp, loop.basis().basis, r.final, cfg.root.lp, pc, cfg.branching);
+    const auto d = select_branch(loop.lp_mut(), loop.basis().basis, r.final, cfg.root.lp, pc, cfg.branching);
+    const Lp& lp = loop.lp();  // bounds restored by select_branch
     o.strong_pivots += d.strong_pivots;
     o.strong_candidates += d.strong_candidates;
     if (d.edge < 0) throw std::logic_error("bnc: fractional node without a branching candidate");
@@ -290,6 +290,8 @@ public:
                                      {"certificate", out_.status == BnCResult::Status::Optimal && out_.lb_int == out_.ub &&
                                                              tour_cost(inst_, out_.best) == out_.ub ? "ok" : "none"},
                                      {"parallel_lps", std::to_string(cfg_.parallel_lps)},
+                                     {"open_bytes", std::to_string(open_bytes())}, {"pool_cuts", std::to_string(loop_.pool().size())},
+                                     {"edges", std::to_string(g_.edges.size())},
                                      {"checkpoints", std::to_string(out_.checkpoints_written)},
                                      {"lp_s", fmt(out_.lp_s, 2)}, {"sep_s", fmt(out_.sep_s, 2)},
                                      {"pricing_s", fmt(out_.pricing_s, 2)}, {"total_s", fmt(out_.total_s, 2)}});
@@ -298,6 +300,18 @@ public:
 
 private:
     double elapsed() const { return elapsed0_ + secs(t0_); }
+
+    // Memory held by the open frontier: bound-change lists plus distinct parent bases.
+    uint64_t open_bytes() const {
+        uint64_t b = 0;
+        std::map<const NodeBasis*, int> seen;
+        for (const auto& nd : open_) {
+            b += nd.bounds.size() * sizeof(BoundChange);
+            if (nd.parent_basis && seen.emplace(nd.parent_basis.get(), 0).second)
+                b += nd.parent_basis->basis.col.size() + nd.parent_basis->basis.row.size() + 8 * nd.parent_basis->active.size();
+        }
+        return b;
+    }
 
     // Root: cut-and-price with the root limits; its outcome is applied like any node's, then the
     // permanent root RCF runs against the (possibly improved) UB.
@@ -398,6 +412,7 @@ private:
             apply(res[w], true);
         }
         loop_.reset_to(last_worker_basis_);  // rows found by the batch carry forward, as in the serial loop
+
         if (peak_rss_bytes() > cfg_.ram_cap_bytes)
             throw std::runtime_error("bnc: peak RSS above the parallel-lps memory cap (" + std::to_string(cfg_.ram_cap_bytes) + " bytes)");
         progress();

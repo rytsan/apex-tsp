@@ -67,7 +67,8 @@ void CutLoop::reset_to(const NodeBasis& b) {
     basis_ = b.basis;
     basis_.col.resize(g_.edges.size(), VarState::AtLower);
     warm_ = true;
-    build_lp();
+    Lp empty;  // the master never solves in parallel mode: release its LP (solve() rebuilds it)
+    std::swap(lp_, empty);
 }
 
 void CutLoop::save(std::ostream& o) const {
