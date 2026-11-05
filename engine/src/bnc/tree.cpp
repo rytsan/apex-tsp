@@ -26,18 +26,6 @@ bool integral(const std::vector<double>& x) {
 
 bool prunable(double bound, int64_t ub) { return std::ceil(bound - 1e-6) >= static_cast<double>(ub); }
 
-// Most fractional free column (|x - 0.5| minimal), ties to the lowest index. -1 if none.
-int64_t most_fractional(const Lp& lp, const std::vector<double>& x) {
-    int64_t best = -1;
-    double score = INFINITY;
-    for (size_t j = 0; j < x.size(); ++j) {
-        if (lp.lower[j] == lp.upper[j] || x[j] <= 1e-6 || x[j] >= 1 - 1e-6) continue;
-        const double s = std::abs(x[j] - 0.5);
-        if (s < score) { score = s; best = static_cast<int64_t>(j); }
-    }
-    return best;
-}
-
 }  // namespace
 
 const char* status_name(BnCResult::Status s) {
@@ -118,14 +106,21 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
     apply_root_rcf(g, out.root.final, out.root.global_lb, out.ub, out.root.rcf_fixed0, out.root.rcf_fixed1);
 
     std::vector<BnCNode> open;
+    Pseudocosts pc;
     uint32_t next_id = 1;
     auto branch = [&](const RootLoopResult& r, const BnCNode& parent) {
-        const int64_t j = most_fractional(loop.lp(), r.final.x);
+        Lp lp = loop.lp();
+        const auto d = select_branch(lp, loop.basis().basis, r.final, cfg.root.lp, pc, cfg.branching);
+        out.strong_pivots += d.strong_pivots;
+        out.strong_candidates += d.strong_candidates;
+        out.max_node_strong_pivots = std::max(out.max_node_strong_pivots, d.strong_pivots);
+        const int64_t j = d.edge;
         if (j < 0) return false;
         auto basis = std::make_shared<const NodeBasis>(loop.basis());
         const auto e = static_cast<uint32_t>(j);
         for (uint8_t v : {uint8_t{0}, uint8_t{1}}) {  // x_e = 1 pushed last: the dive takes it first
-            BnCNode c{next_id++, parent.depth + 1, r.global_lb, parent.bounds, basis, NodeState::Open};
+            BnCNode c{next_id++, parent.depth + 1, r.global_lb, parent.bounds, basis, NodeState::Open,
+                      j, v, v ? 1 - r.final.x[e] : r.final.x[e], r.lp_value};
             c.bounds.push_back({e, v});
             open.push_back(std::move(c));
         }
@@ -176,6 +171,9 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
         accumulate(r);
         // Bound changes alone never break dual feasibility of the parent basis (MASTER M3.1).
         if (warm_check && r.first_dual_flips > 0) ++out.warm_dual_infeasible;
+        if (node.branch_edge >= 0 && !r.infeasible && (r.converged || r.tailing_off))  // full child LP gain
+            pc.observe(static_cast<uint32_t>(node.branch_edge), node.branch_dir,
+                       std::max(0.0, r.lp_value - node.parent_lp) / node.branch_frac);
         ++(node.parent_basis ? out.warm_starts : out.cold_starts);
         if (r.cutoff) { ++out.pruned; continue; }
         decide(r, node);

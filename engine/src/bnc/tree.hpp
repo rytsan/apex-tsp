@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 
+#include "bnc/branching.hpp"
 #include "bnc/root_loop.hpp"
 #include "graph/tours.hpp"
 
@@ -17,12 +18,17 @@ struct BnCNode {
     BoundChanges bounds;                           // full list from the root
     std::shared_ptr<const NodeBasis> parent_basis; // shared by both children
     NodeState state;
+    // Branching that created this node (pseudocost update once it is solved).
+    int64_t branch_edge = -1;
+    uint8_t branch_dir = 0;
+    double branch_frac = 0, parent_lp = 0;
 };
 
 struct BnCConfig {
     RootLoopConfig root;                           // cut loop (also used at nodes)
     enum class Select { DiveThenBest, BestBound } select = Select::DiveThenBest;  // --node-select
     NodeLimits node;                               // per-node cut loop limits (cutoff set by the tree)
+    BranchingConfig branching;
     double time_limit_s = INFINITY;                // --time-limit (anytime: in-flight node finishes)
     uint64_t max_nodes = UINT64_MAX;
     BnCConfig() {
@@ -40,7 +46,8 @@ struct BnCResult {
     int64_t lb_int = 0;              // ceil(lb - 1e-6)
     uint64_t nodes = 0, pruned = 0, infeasible = 0, integral = 0, branched = 0, max_depth = 0;
     uint64_t ub_improvements = 0, warm_starts = 0, cold_starts = 0;
-    uint64_t warm_dual_infeasible = 0;  // warm starts whose basis needed dual repair with unchanged columns (must stay 0)
+    uint64_t warm_dual_infeasible = 0;
+    uint64_t strong_pivots = 0, strong_candidates = 0, max_node_strong_pivots = 0;  // warm starts whose basis needed dual repair with unchanged columns (must stay 0)
     double root_lb = -INFINITY, lp_s = 0, sep_s = 0, pricing_s = 0, total_s = 0;
     RootLoopResult root;
     std::vector<uint32_t> processing_order;  // node ids in processing order (determinism tests)
@@ -51,8 +58,8 @@ Tour extract_tour(const Instance& inst, const CandidateGraph& g, const std::vect
 
 // Global branch-and-cut (exact mode). Root = CutLoop + root RCF with the initial tour as UB; every
 // node re-runs the cut-and-price loop under its bound changes from the parent basis. Node bounds
-// are Farley bounds over the complete graph, so pruning is globally valid. Branching here is
-// most-fractional (M3.2 replaces it with reliability branching).
+// are Farley bounds over the complete graph, so pruning is globally valid. Branching:
+// reliability branching (strong branching until pseudocosts are reliable, M3.2).
 BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg, Tour initial,
                   TelemetrySink* tel = nullptr);
 

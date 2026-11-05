@@ -78,13 +78,50 @@ TEST_CASE("T_bnc_time_limit_anytime") {
     if (res.status != apex::BnCResult::Status::Optimal) CHECK(res.status == apex::BnCResult::Status::TimeLimit);
 }
 
-TEST_CASE("T_bnc_deterministic_order") {
-    const auto inst = load("eil51");
-    std::vector<uint32_t> first;
-    for (int run = 0; run < 2; ++run) {
+TEST_CASE("T_branching_deterministic") {
+    // Same seed, one thread => identical node processing order and result (reliability branching).
+    for (const char* name : {"eil51", "a280"}) {
+        CAPTURE(name);
+        const auto inst = load(name);
+        std::vector<uint32_t> first;
+        int64_t ub = 0;
+        for (int run = 0; run < 2; ++run) {
+            auto g = apex::build_candidate_graph(inst);
+            const auto res = apex::run_bnc(inst, g, apex::BnCConfig{}, heuristic_tour(inst, g));
+            if (run == 0) { first = res.processing_order; ub = res.ub; continue; }
+            CHECK(res.processing_order == first);
+            CHECK(res.ub == ub);
+        }
+    }
+}
+
+TEST_CASE("T_strong_branching_budget") {
+    const auto inst = load("a280");
+    {  // inside the tree: no node exceeds the per-node budget
         auto g = apex::build_candidate_graph(inst);
-        const auto res = apex::run_bnc(inst, g, apex::BnCConfig{}, heuristic_tour(inst, g));
-        if (run == 0) first = res.processing_order;
-        else CHECK(res.processing_order == first);
+        apex::BnCConfig cfg;
+        const auto res = apex::run_bnc(inst, g, cfg, heuristic_tour(inst, g));
+        CHECK(res.strong_candidates > 0);
+        CHECK(res.max_node_strong_pivots <= cfg.branching.node_budget);
+        MESSAGE("a280 strong: candidates=" << res.strong_candidates << " pivots=" << res.strong_pivots
+                << " max/node=" << res.max_node_strong_pivots << " nodes=" << res.nodes);
+    }
+    // Direct call with a tight budget on the root LP; bounds are restored afterwards.
+    auto g = apex::build_candidate_graph(inst);
+    apex::RootLoopConfig rc;
+    apex::CutLoop loop(inst, g, rc);
+    const auto r = loop.solve({}, nullptr, apex::NodeLimits{});
+    for (uint32_t budget : {1u, 7u, 15u, 60u}) {
+        CAPTURE(budget);
+        apex::Lp lp = loop.lp();
+        const auto lower = lp.lower, upper = lp.upper;
+        apex::Pseudocosts pc;
+        apex::BranchingConfig bc;
+        bc.node_budget = budget;
+        const auto d = apex::select_branch(lp, loop.basis().basis, r.final, rc.lp, pc, bc);
+        CHECK(d.strong_pivots <= budget);
+        CHECK(d.edge >= 0);
+        CHECK(lp.lower == lower);
+        CHECK(lp.upper == upper);
     }
 }

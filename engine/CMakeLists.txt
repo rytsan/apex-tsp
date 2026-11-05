@@ -45,6 +45,7 @@ add_library(apex_core STATIC
     src/cuts/blossom.cpp
     src/cuts/pool.cpp
     src/bnc/root_loop.cpp
+    src/bnc/branching.cpp
     src/bnc/tree.cpp)
 target_include_directories(apex_core PUBLIC src)
 find_package(Threads REQUIRED)
