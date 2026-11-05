@@ -193,7 +193,7 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
     out.total_s = secs(t0);
     if (tel)
         tel->event("FINISHED", {{"status", status_name(out.status)}, {"ub", std::to_string(out.ub)}, {"lb", fmt(out.lb)},
-                                {"gap_pct", fmt(100.0 * (out.ub - out.lb) / std::max<double>(1, out.ub))},
+                                {"gap_pct", fmt(100.0 * (out.ub - out.lb) / std::max(1.0, static_cast<double>(out.ub)))},
                                 {"nodes", std::to_string(out.nodes)}, {"open", std::to_string(open.size())},
                                 {"max_depth", std::to_string(out.max_depth)}, {"root_lb", fmt(out.root_lb)},
                                 {"lp_s", fmt(out.lp_s, 2)}, {"sep_s", fmt(out.sep_s, 2)},
