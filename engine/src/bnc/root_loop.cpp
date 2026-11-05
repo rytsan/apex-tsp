@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "bnc/rcf.hpp"
 #include "cuts/support.hpp"
 
 namespace apex {
@@ -325,23 +326,6 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
     if (std::isfinite(out.global_lb)) out.global_lb_int = static_cast<int64_t>(std::ceil(out.global_lb - 1e-6));
     out.total_s = secs(t0);
     return out;
-}
-
-void apply_root_rcf(CandidateGraph& g, const SimplexResult& final, double global_lb, int64_t ub, uint32_t& fixed0,
-                    uint32_t& fixed1) {
-    for (uint32_t j = 0; j < final.var_state.size(); ++j) {
-        const auto st = static_cast<VarState>(final.var_state[j]);
-        const double d = final.reduced_costs[j];
-        if (st == VarState::AtLower && d > 0 && !(g.edges[j].status & kFixed0) &&
-            std::ceil(global_lb + d - 1e-6) >= static_cast<double>(ub)) {
-            g.edges[j].status |= kFixed0 | kRcfPruned;
-            ++fixed0;
-        } else if (st == VarState::AtUpper && d < 0 && !(g.edges[j].status & kFixed1) &&
-                   std::ceil(global_lb - d - 1e-6) >= static_cast<double>(ub)) {
-            g.edges[j].status |= kFixed1;
-            ++fixed1;
-        }
-    }
 }
 
 RootLoopResult run_root_loop(const Instance& inst, CandidateGraph& g, const RootLoopConfig& cfg, TelemetrySink* tel) {

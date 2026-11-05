@@ -125,12 +125,6 @@ private:
     BoundChanges bc_;
 };
 
-// Root reduced-cost fixing with the sound integral rule (MASTER §5.5): fix x_e = 0 iff
-// ceil(global_lb + d_e - 1e-6) >= ub; symmetric for 1. Root-scoped (permanent): recorded in
-// g.edges[].status (kFixed0 | kRcfPruned, kFixed1).
-void apply_root_rcf(CandidateGraph& g, const SimplexResult& final, double global_lb, int64_t ub,
-                    uint32_t& fixed0, uint32_t& fixed1);
-
 // Root call of CutLoop (no branching) followed by global Farley bound and root RCF.
 RootLoopResult run_root_loop(const Instance& inst, CandidateGraph& g, const RootLoopConfig& cfg,
                              TelemetrySink* tel = nullptr);

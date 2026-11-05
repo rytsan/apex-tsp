@@ -46,6 +46,7 @@ add_library(apex_core STATIC
     src/cuts/pool.cpp
     src/bnc/root_loop.cpp
     src/bnc/branching.cpp
+    src/bnc/rcf.cpp
     src/bnc/tree.cpp)
 target_include_directories(apex_core PUBLIC src)
 find_package(Threads REQUIRED)
@@ -77,7 +78,8 @@ add_executable(engine_tests
     tests/test_blossom.cpp
     tests/test_pool.cpp
     tests/test_root_loop.cpp
-    tests/test_tree.cpp)
+    tests/test_tree.cpp
+    tests/test_rcf.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
 target_link_libraries(engine_tests PRIVATE apex_core)

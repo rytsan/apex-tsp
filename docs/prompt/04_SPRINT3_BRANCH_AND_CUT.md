@@ -45,8 +45,9 @@ checkpoint v2).
   `ceil(z + |c_e_bar| - 1e-6) >= UB`.
 - Re-run RCF after every UB improvement (queue a cheap pass at the next node boundary).
 - Tests: **`T_rcf_never_prunes_optimal_edge`** — for >= 20 small instances (n <= 11, brute-force
-  optimal tour known), run the root LP + RCF with UB = optimal and assert no optimal-tour edge
-  is pruned; also run with UB = optimal + 100 and verify the pruning set grows (sanity).
+  optimal tour known), run the root LP + RCF and assert, for every fixing, that the cheapest tour
+  through a 0-fixed edge (avoiding a 1-fixed edge) costs >= UB, for UB = optimal, optimal + 1
+  (no optimal-tour edge pruned) and optimal + 100; the larger UB must fix a subset (sanity).
 
 ## M3.4 — Tour extraction (`src/bnc/tree.cpp` helper or `src/graph/tours.hpp`)
 

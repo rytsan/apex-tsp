@@ -61,8 +61,9 @@ TEST_CASE("T_bnc_proves_optimality_small") {
         CHECK(apex::tour_cost(inst, res.best) == res.ub);  // certificate: recomputed with the metric
         CHECK(res.warm_dual_infeasible == 0);
         CHECK(res.root_lb <= r.opt + 1e-6);
+        if (std::string(r.name) == "a280") CHECK(res.rcf_node_fixings > 0);  // node-scoped RCF exercised on a proof
         MESSAGE(std::string(r.name) << " nodes=" << res.nodes << " branched=" << res.branched << " depth=" << res.max_depth
-                       << " root_lb=" << res.root_lb << " warm=" << res.warm_starts << " t=" << res.total_s);
+                       << " root_lb=" << res.root_lb << " warm=" << res.warm_starts << " node_rcf=" << res.rcf_node_fixings << " t=" << res.total_s);
     }
 }
 
