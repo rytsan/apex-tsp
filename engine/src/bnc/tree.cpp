@@ -34,7 +34,7 @@ bool prunable(double bound, int64_t ub) { return std::ceil(bound - 1e-6) >= stat
 
 const char* status_name(BnCResult::Status s) {
     switch (s) {
-        case BnCResult::Status::Optimal: return "OPTIMAL";
+        case BnCResult::Status::Optimal: return "OPTIMAL_PROVEN";
         case BnCResult::Status::TimeLimit: return "TIME_LIMIT";
         case BnCResult::Status::NodeLimit: return "NODE_LIMIT";
     }
@@ -80,6 +80,8 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
         out.lp_s += r.lp_s;
         out.sep_s += r.sep_s;
         out.pricing_s += r.pricing_s;
+        out.verification_pricing_calls += r.pricing_calls;
+        out.priced_columns += r.priced_edges;
     };
     bool found_integral = false;
     bool rcf_pending = false;
@@ -238,6 +240,9 @@ BnCResult run_bnc(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg,
                                 {"gap_pct", fmt(100.0 * (out.ub - out.lb) / std::max(1.0, static_cast<double>(out.ub)))},
                                 {"nodes", std::to_string(out.nodes)}, {"open", std::to_string(open.size())},
                                 {"max_depth", std::to_string(out.max_depth)}, {"root_lb", fmt(out.root_lb)},
+                                {"verification_pricing_calls", std::to_string(out.verification_pricing_calls)},
+                                {"priced_columns", std::to_string(out.priced_columns)},
+                                {"certificate", out.status == BnCResult::Status::Optimal && out.lb_int == out.ub && tour_cost(inst, out.best) == out.ub ? "ok" : "none"},
                                 {"lp_s", fmt(out.lp_s, 2)}, {"sep_s", fmt(out.sep_s, 2)},
                                 {"pricing_s", fmt(out.pricing_s, 2)}, {"total_s", fmt(out.total_s, 2)}});
     return out;

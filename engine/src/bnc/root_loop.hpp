@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "app/telemetry.hpp"
+#include "bnc/pricing.hpp"
 #include "core/instance.hpp"
 #include "cuts/blossom.hpp"
 #include "cuts/mincut.hpp"
@@ -34,6 +35,7 @@ struct RootLoopConfig {
     bool price = true;
     uint32_t pricing_batch = 2000;
     uint32_t max_pricing_rounds = 1000000;
+    PricingMode pricing_mode = PricingMode::Grid;  // exact in every mode; Scan is the O(n^2) reference
 };
 
 struct RootRoundLog {
@@ -56,7 +58,8 @@ struct RootLoopResult {
     int64_t global_lb_int = 0;       // ceil(global_lb - 1e-6)
     uint64_t negative_rc_edges = 0;  // non-candidate edges with negative reduced cost (final)
     uint32_t pricing_rounds = 0;
-    uint32_t first_dual_flips = 0;   // initial dual-feasibility repairs of the first solve (warm-start check)
+    uint32_t first_dual_flips = 0;
+    uint64_t pricing_calls = 0;      // complete-graph pricing passes (each one a verification)   // initial dual-feasibility repairs of the first solve (warm-start check)
     uint64_t priced_edges = 0;       // columns added by pricing (status kNewPricing)
     uint32_t rcf_fixed0 = 0, rcf_fixed1 = 0;
     uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0;
@@ -113,11 +116,17 @@ private:
     void adopt(const NodeBasis& warm);
     size_t price(const SimplexResult& res, double& glb, RootLoopResult& out, bool farkas);
 
+public:
+    const PricingStats& pricing_stats() const { return pricer_.stats(); }
+
+private:
+
     const Instance& inst_;
     CandidateGraph& g_;
     RootLoopConfig cfg_;
     TelemetrySink* tel_;
     CutPool pool_;
+    EdgePricer pricer_;
     std::vector<size_t> active_;
     Lp lp_;
     Basis basis_;

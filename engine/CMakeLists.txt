@@ -47,6 +47,7 @@ add_library(apex_core STATIC
     src/cuts/pool.cpp
     src/bnc/root_loop.cpp
     src/bnc/branching.cpp
+    src/bnc/pricing.cpp
     src/bnc/rcf.cpp
     src/bnc/tree.cpp)
 target_include_directories(apex_core PUBLIC src)
@@ -80,7 +81,8 @@ add_executable(engine_tests
     tests/test_pool.cpp
     tests/test_root_loop.cpp
     tests/test_tree.cpp
-    tests/test_rcf.cpp)
+    tests/test_rcf.cpp
+    tests/test_pricing.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
 target_link_libraries(engine_tests PRIVATE apex_core)
@@ -91,3 +93,8 @@ target_link_libraries(lp_bench PRIVATE apex_core)
 
 add_executable(root_bench tools/root_bench.cpp)
 target_link_libraries(root_bench PRIVATE apex_core)
+
+# Pricing filter parity (SIMD vs scalar) needs identical rounding: no FMA contraction.
+if(NOT MSVC)
+    set_source_files_properties(src/bnc/pricing.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+endif()

@@ -51,6 +51,9 @@ struct BnCResult {
     uint64_t nodes = 0, pruned = 0, infeasible = 0, integral = 0, branched = 0, max_depth = 0;
     uint64_t ub_improvements = 0, warm_starts = 0, cold_starts = 0;
     uint64_t warm_dual_infeasible = 0;
+    // Certificate: every pruning used a Farley bound from exact pricing over the complete graph,
+    // so verification pricing (MASTER §5.6) runs at every node, not only at the end.
+    uint64_t verification_pricing_calls = 0, priced_columns = 0;
     uint64_t rcf_node_fixings = 0;     // node-scoped fixes passed to children
     uint64_t strong_pivots = 0, strong_candidates = 0, max_node_strong_pivots = 0;  // warm starts whose basis needed dual repair with unchanged columns (must stay 0)
     uint64_t heuristic_calls = 0;

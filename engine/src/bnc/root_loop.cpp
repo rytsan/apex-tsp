@@ -26,53 +26,22 @@ std::string fmt(double v, int p = 3) {
 
 // Farley-type bound valid for the complete graph: the LP duals extend to every edge e outside
 // the candidate graph with bound dual min(0, rc_e) (x_e <= 1 is implied by degree rows), so
-// z_cand + sum_{e not cand} min(0, rc_e) is a weak-duality lower bound. rc_e is exact:
-//   rc_e = c_e - y_u - y_v - sum_{cuts K crossing e} y_K,
-//   sum_K crossing = sigma_u + sigma_v - 2 * sum_{K containing u and v} y_K.
-// (Non-candidate edges are never blossom teeth, so their cut coefficient is +1 when crossing.)
-// ponytail: O(n^2) pair scan; replace by grid-based pricing (MASTER §5.6, Sprint 3) for n > ~10k.
-struct NegEdge { double rc; uint32_t u, v; };
-
+// z_cand + sum_{e not cand} min(0, rc_e) is a weak-duality lower bound. rc_e is exact over all
+// n(n-1)/2 pairs (EdgePricer: spatial grid with an exact radius, MASTER §5.6).
 // farkas: rc_e = -f^T a_e with the Farkas ray f in place of y and zero costs; an edge with
 // rc_e < 0 is the only kind that can repair an infeasible LP.
-double farley_bound(const Instance& inst, const CandidateGraph& g, const CutPool& pool, const std::vector<size_t>& active,
-                    const SimplexResult& res, uint64_t& negative, std::vector<NegEdge>* list = nullptr,
-                    bool farkas = false) {
+double farley_bound(EdgePricer& pricer, PricingMode mode, const Instance& inst, const CandidateGraph& g,
+                    const CutPool& pool, const std::vector<size_t>& active, const SimplexResult& res,
+                    uint64_t& negative, std::vector<NegEdge>* list = nullptr, bool farkas = false) {
     const auto& y = farkas ? res.farkas : res.duals;
     const uint32_t n = inst.n;
-    std::vector<double> sigma(n, 0.0);
-    std::vector<std::vector<std::pair<uint32_t, double>>> member(n);  // (cut k, y_K), sorted by k
-    for (size_t k = 0; k < active.size(); ++k) {
-        const double yk = y[n + k];
-        if (yk == 0.0) continue;
-        for (uint32_t v : pool.at(active[k]).nodes) {
-            sigma[v] += yk;
-            member[v].push_back({static_cast<uint32_t>(k), yk});
-        }
-    }
+    std::vector<CutDual> cuts(active.size());
+    for (size_t k = 0; k < active.size(); ++k) cuts[k] = {&pool.at(active[k]).nodes, y[n + k]};
     std::unordered_set<uint64_t> cand;
     cand.reserve(g.edges.size() * 2);
     for (const auto& e : g.edges) cand.insert((uint64_t(e.u) << 32) | e.v);
-    double sum = 0;
-    negative = 0;
-    for (uint32_t u = 0; u < n; ++u)
-        for (uint32_t v = u + 1; v < n; ++v) {
-            double rc = (farkas ? 0.0 : dist(inst, u, v)) - y[u] - y[v] - sigma[u] - sigma[v];
-            if (rc >= 0) continue;  // the both-endpoints term only increases rc
-            const auto& a = member[u];
-            const auto& b = member[v];
-            double both = 0;
-            for (size_t i = 0, j = 0; i < a.size() && j < b.size();) {
-                if (a[i].first == b[j].first) { both += a[i].second; ++i; ++j; }
-                else if (a[i].first < b[j].first) ++i;
-                else ++j;
-            }
-            rc += 2 * both;
-            if (rc >= -1e-9 || cand.count((uint64_t(u) << 32) | v)) continue;
-            sum += rc;
-            ++negative;
-            if (list) list->push_back({rc, u, v});
-        }
+    const std::vector<double> ynode(y.begin(), y.begin() + n);
+    const double sum = pricer.price(ynode, cuts, cand, farkas, mode, list, negative);
     return farkas ? 0.0 : res.objective + sum;
 }
 
@@ -80,7 +49,7 @@ double farley_bound(const Instance& inst, const CandidateGraph& g, const CutPool
 
 
 CutLoop::CutLoop(const Instance& inst, CandidateGraph& g, const RootLoopConfig& cfg, TelemetrySink* tel)
-    : inst_(inst), g_(g), cfg_(cfg), tel_(tel), pool_(cfg.age_limit) {
+    : inst_(inst), g_(g), cfg_(cfg), tel_(tel), pool_(cfg.age_limit), pricer_(inst) {
     build_lp();
 }
 
@@ -147,8 +116,9 @@ size_t CutLoop::price(const SimplexResult& res, double& glb, RootLoopResult& out
     const auto tp = Clock::now();
     std::vector<NegEdge> neg;
     uint64_t cnt = 0;
-    glb = farley_bound(inst_, g_, pool_, active_, res, cnt, &neg, farkas);
+    glb = farley_bound(pricer_, cfg_.pricing_mode, inst_, g_, pool_, active_, res, cnt, &neg, farkas);
     out.pricing_s += secs(tp);
+    ++out.pricing_calls;
     if (farkas) glb = -INFINITY;  // a ray proves nothing about the bound until it is clean
     if (neg.empty() || !cfg_.price || out.pricing_rounds >= cfg_.max_pricing_rounds) return 0;
     std::sort(neg.begin(), neg.end(), [](const NegEdge& x, const NegEdge& y) {
@@ -320,7 +290,8 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
     out.pool = pool_.stats();
     if (!out.infeasible && cfg_.compute_global_bound && !out.final.duals.empty()) {
         const auto tp = Clock::now();
-        out.global_lb = farley_bound(inst_, g_, pool_, active_, out.final, out.negative_rc_edges);
+        out.global_lb = farley_bound(pricer_, cfg_.pricing_mode, inst_, g_, pool_, active_, out.final, out.negative_rc_edges);
+        ++out.pricing_calls;
         out.pricing_s += secs(tp);
     }
     if (std::isfinite(out.global_lb)) out.global_lb_int = static_cast<int64_t>(std::ceil(out.global_lb - 1e-6));
