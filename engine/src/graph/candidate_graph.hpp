@@ -44,4 +44,7 @@ struct CandidateGraph {
 // If disconnected, adds minimum-cost connecting edges (Kruskal over growing k-NN).
 CandidateGraph build_candidate_graph(const Instance& inst, const CandidateConfig& cfg = {});
 
+// Recomputes the CSR adjacency (cost-sorted) after edges were appended (e.g. by pricing).
+void rebuild_adjacency(CandidateGraph& g);
+
 }  // namespace apex

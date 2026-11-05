@@ -180,6 +180,8 @@ Approved deviations from the original kit (README §4: refinements are recorded 
 | 2026-11-04 | `DISPLAY_DATA_SECTION`-only instances rejected with a clear error | M0.1 |
 | 2026-11-04 | Reference hardware lowered to >= 4 physical cores | MASTER §3 |
 | 2026-11-04 | `.github/` at repo root (GitHub Actions requirement), not under `engine/` | MASTER §3 layout |
+| 2026-11-04 | Root LP bound made globally valid: Farley bound with exact reduced costs over the complete graph; pricing adds negative columns every round (root LB reported only fully priced). Root RCF uses the sound rule ceil(global_lb + d - 1e-6) >= UB instead of LB_int + d > UB - eps (MASTER §5.5 formula can prune tours better than UB) | MASTER §5.5, M2.6 |
+| 2026-11-04 | Root loop tailing-off stop (gain < 1e-4 relative over 50 rounds), reported separately from convergence | M2.6 |
 | 2026-11-04 | Iterated SEC shrinking: contract a supernode pair only if both have x(delta) = 2 (merging across c > 1 hides violated SECs; found by `T_shrinking_safe`) | MASTER §6, M2.2 |
 | 2026-11-04 | Blossom inequality corrected to the TSP 2-matching form `x(delta(H)\T) - x(T) >= 1 - |T|` (handle + odd teeth); the original `x(E(S)) <= (|S|-1)/2` is invalid for the TSP. Heuristic separation default, Padberg-Rao behind `--sep-blossom=full` | MASTER §6, M2.4 |
 | 2026-11-04 | Dual phase 1 by artificial bounds (Koberstein), **only** when the initial basis is not dual feasible (generic LPs such as Netlib). TSP LPs (c >= 0, 0 <= x <= 1) never trigger it; asserted by tests | M1.4 |
@@ -216,3 +218,24 @@ Full transcript and procedure: [`docs/LP_GATE.md`](docs/LP_GATE.md).
 | G1.3 pr1002-shaped stress LP | 6002 x 5263: optimal, 2951 it/s (Devex); 2002 x 5263: optimal, 13951 it/s |
 | G1.4 Sprint 1 tests | green (see CI) |
 | G1.5 ASan + UBSan | clean |
+
+---
+
+## 12. Sprint 2 results (hardware: AMD Ryzen 5 3600X, 5 physical cores visible under WSL2, 25 GB RAM, GCC 13.3, preset `benchmark`)
+
+Transcripts: [`docs/SPRINT2_ROOT.md`](docs/SPRINT2_ROOT.md). The LB is the fully priced global bound
+(no negative-reduced-cost edge anywhere in the complete graph). The gap is measured against the MASTER §7 optimum.
+
+| Instance | Root LB | % of optimum | Gap vs. optimum | Gap vs. 2-opt UB | Rounds | Stop | Time |
+|---|---|---|---|---|---|---|---|
+| pr1002 | 258402.50 | 99.752% | 0.248% | 7.496% (UB 279341) | 97 | converged | 3.5 s |
+| fl3795 | 28568.54 | 99.293% | 0.707% | 13.381% (UB 32982) | 415 | tailing-off | 335 s |
+
+| Gate | Result |
+|---|---|
+| G2.1 pr1002 within 97–99.5% of 259045, never above | 99.752%: below the optimum, but above the 99.5% band upper limit (operator decision pending) |
+| G2.2 root gap <= 2% (vs. optimum) on pr1002 and fl3795 | 0.248% / 0.707% |
+| G2.3 pr1002 <= 10 min, fl3795 <= 20 min | 3.5 s / 335 s |
+| G2.4 Sprint 2 tests | green |
+| G2.5 LB <= best known on all runs | yes (ratios above) |
+| G2.6 ASan + UBSan | clean |

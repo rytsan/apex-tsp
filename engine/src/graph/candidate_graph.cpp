@@ -80,24 +80,28 @@ CandidateGraph build_candidate_graph(const Instance& inst, const CandidateConfig
     g.edges.reserve(pairs.size());
     for (auto [u, v] : pairs) g.edges.push_back(Edge{u, v, dist(inst, u, v), kActive, 0.0});
 
-    g.adj_start.assign(inst.n + 1, 0);
+    rebuild_adjacency(g);
+    return g;
+}
+
+void rebuild_adjacency(CandidateGraph& g) {
+    g.adj_start.assign(g.n + 1, 0);
     for (const auto& e : g.edges) {
         ++g.adj_start[e.u + 1];
         ++g.adj_start[e.v + 1];
     }
-    for (uint32_t i = 0; i < inst.n; ++i) g.adj_start[i + 1] += g.adj_start[i];
+    for (uint32_t i = 0; i < g.n; ++i) g.adj_start[i + 1] += g.adj_start[i];
     g.adj.resize(2 * g.edges.size());
     std::vector<uint32_t> fill(g.adj_start.begin(), g.adj_start.end() - 1);
     for (uint32_t e = 0; e < g.edges.size(); ++e) {
         g.adj[fill[g.edges[e].u]++] = e;
         g.adj[fill[g.edges[e].v]++] = e;
     }
-    for (uint32_t i = 0; i < inst.n; ++i) {
+    for (uint32_t i = 0; i < g.n; ++i) {
         std::sort(g.adj.begin() + g.adj_start[i], g.adj.begin() + g.adj_start[i + 1], [&](uint32_t a, uint32_t b) {
             return std::make_pair(g.edges[a].cost, g.other(a, i)) < std::make_pair(g.edges[b].cost, g.other(b, i));
         });
     }
-    return g;
 }
 
 }  // namespace apex
