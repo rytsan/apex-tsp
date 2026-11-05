@@ -172,6 +172,7 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
     RootLoopResult out;
     bc_ = bc;
     if (warm) adopt(*warm);
+    if (lp_.c.size() != g_.edges.size()) build_lp();  // columns priced in by a call that stopped early
     apply_bounds();
     double prev_obj = -INFINITY;
     bool added_columns = false;  // previous round added priced columns (LP value may drop)

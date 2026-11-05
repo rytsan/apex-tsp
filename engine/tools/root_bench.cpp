@@ -77,6 +77,9 @@ int main(int argc, char** argv) {
             std::printf("  warm=%llu cold=%llu warm_dual_infeasible=%llu  edges=%zu  rcf_root fixed0=%u fixed1=%u\n",
                         static_cast<unsigned long long>(r.warm_starts), static_cast<unsigned long long>(r.cold_starts),
                         static_cast<unsigned long long>(r.warm_dual_infeasible), g.edges.size(), r.root.rcf_fixed0, r.root.rcf_fixed1);
+            std::printf("  strong branching: candidates=%llu pivots=%llu max_per_node=%llu\n",
+                        static_cast<unsigned long long>(r.strong_candidates), static_cast<unsigned long long>(r.strong_pivots),
+                        static_cast<unsigned long long>(r.max_node_strong_pivots));
             std::printf("  time: lp=%.2fs (%.1f%%) sep=%.2fs pricing=%.2fs total=%.2fs nodes/s=%.2f rss=%.1fMB\n", r.lp_s,
                         100.0 * r.lp_s / std::max(1e-9, r.total_s), r.sep_s, r.pricing_s, r.total_s,
                         r.nodes / std::max(1e-9, r.total_s), apex::peak_rss_bytes() / 1048576.0);

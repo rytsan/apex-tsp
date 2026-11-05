@@ -66,6 +66,23 @@ TEST_CASE("T_bnc_proves_optimality_small") {
     }
 }
 
+TEST_CASE("T_cutloop_resolve_after_cutoff_with_new_columns") {
+    // A call stopped by the cutoff right after pricing added columns must leave the loop usable.
+    const auto inst = load("pr1002");
+    auto g = apex::build_candidate_graph(inst);
+    apex::RootLoopConfig cfg;
+    apex::CutLoop loop(inst, g, cfg);
+    apex::NodeLimits lim;
+    lim.cutoff = 1;  // every Farley bound reaches it: stop at the first priced round
+    const size_t before = g.edges.size();
+    const auto r = loop.solve({}, nullptr, lim);
+    CHECK(r.cutoff);
+    CHECK(g.edges.size() > before);  // pr1002 root prices columns in round 0
+    const auto r2 = loop.solve({}, nullptr, apex::NodeLimits{});
+    CHECK(r2.converged);
+    CHECK(loop.lp().c.size() == g.edges.size());
+}
+
 TEST_CASE("T_bnc_time_limit_anytime") {
     const auto inst = load("pr1002");
     auto g = apex::build_candidate_graph(inst);
