@@ -379,6 +379,7 @@ private:
         budget_.release();
         if (out_.root.infeasible) throw std::logic_error("bnc: root LP infeasible over the complete graph");
         out_.root_lb = out_.root.global_lb;
+        if (!out_.root.infeasible) loop_.set_root_filter(out_.root.final, out_.root_lb);
         peak_factor_ = out_.root.peak_factor_nnz;
         lp_nnz_ = loop_.lp().A.nnz();
         out_.nodes = 1;

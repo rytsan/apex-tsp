@@ -143,6 +143,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
         pc.threads = opt.threads;
         pc.seed = rng();
         if (left > 0) pc.time_limit_s = exact ? 0.1 * left : left;
+        if (exact) pc.stall_per_node = 50;  // warm-up ends when the ILS stops improving
         const auto ps = apex::polish_tour(tour, inst, g, pc);
         tel.event("polish", {{"heuristic", "true"}, {"ub", std::to_string(tour.cost)}, {"start", std::to_string(ps.start_cost)},
                              {"parallel", ps.parallel ? "true" : "false"}, {"segments", std::to_string(ps.segments)},
@@ -156,6 +157,9 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
         const uint32_t added = apex::add_tour_edges(g, inst, tour);
         apex::BnCConfig bc;
         bc.parallel_lps = std::clamp<uint32_t>(opt.threads, 1, 6);
+        // The heuristic phase already gives a near-optimal UB: no dive needed to find one, the tree
+        // only has to raise the LB, so best-bound from the root.
+        bc.select = apex::BnCConfig::Select::BestBound;
         bc.mem_limit_bytes = mem_limit;
         bc.seed = opt.seed;
         bc.tour_path = opt.out;

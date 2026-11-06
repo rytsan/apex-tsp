@@ -33,7 +33,8 @@ std::string fmt(double v, int p = 3) {
 // rc_e < 0 is the only kind that can repair an infeasible LP.
 double farley_bound(EdgePricer& pricer, PricingMode mode, const Instance& inst, const CandidateGraph& g,
                     const CutPool& pool, const std::vector<size_t>& active, const SimplexResult& res,
-                    uint64_t& negative, std::vector<NegEdge>* list = nullptr, bool farkas = false) {
+                    uint64_t& negative, std::vector<NegEdge>* list = nullptr, bool farkas = false,
+                    const PricingFilter* filter = nullptr) {
     const auto& y = farkas ? res.farkas : res.duals;
     const uint32_t n = inst.n;
     std::vector<CutDual> cuts(active.size());
@@ -42,7 +43,7 @@ double farley_bound(EdgePricer& pricer, PricingMode mode, const Instance& inst, 
     cand.reserve(g.edges.size() * 2);
     for (const auto& e : g.edges) cand.insert((uint64_t(e.u) << 32) | e.v);
     const std::vector<double> ynode(y.begin(), y.begin() + n);
-    const double sum = pricer.price(ynode, cuts, cand, farkas, mode, list, negative);
+    const double sum = pricer.price(ynode, cuts, cand, farkas, mode, list, negative, filter);
     return farkas ? 0.0 : res.objective + sum;
 }
 
@@ -56,8 +57,20 @@ CutLoop::CutLoop(const Instance& inst, CandidateGraph& g, const RootLoopConfig& 
 
 CutLoop::CutLoop(const CutLoop& o, CandidateGraph& g)
     : inst_(o.inst_), g_(g), cfg_(o.cfg_), tel_(nullptr), pool_(o.pool_), pricer_(o.pricer_), active_(o.active_),
-      basis_(o.basis_), warm_(o.warm_) {
+      basis_(o.basis_), warm_(o.warm_), root_yp_(o.root_yp_), root_lb_(o.root_lb_) {
     build_lp();
+}
+
+void CutLoop::set_root_filter(const SimplexResult& root_final, double root_lb) {
+    const uint32_t n = inst_.n;
+    if (root_final.duals.size() != n + active_.size() || !std::isfinite(root_lb)) return;
+    root_yp_.assign(root_final.duals.begin(), root_final.duals.begin() + n);
+    for (size_t k = 0; k < active_.size(); ++k) {
+        const double yk = root_final.duals[n + k];
+        if (yk > 0)
+            for (uint32_t v : pool_.at(active_[k]).nodes) root_yp_[v] += yk;
+    }
+    root_lb_ = root_lb;
 }
 
 void CutLoop::reset_to(const NodeBasis& b) {
@@ -82,6 +95,8 @@ void CutLoop::save(std::ostream& o) const {
     put_vec(o, col);
     put_vec(o, row);
     put(o, warm_);
+    put_vec(o, root_yp_);
+    put(o, root_lb_);
     o << '\n';
 }
 
@@ -96,6 +111,8 @@ void CutLoop::load(std::istream& in) {
     for (auto s : get_vec<uint8_t>(in)) basis_.col.push_back(static_cast<VarState>(s));
     for (auto s : get_vec<uint8_t>(in)) basis_.row.push_back(static_cast<VarState>(s));
     warm_ = get<bool>(in);
+    root_yp_ = get_vec<double>(in);
+    root_lb_ = get<double>(in);
     build_lp();
 }
 
@@ -162,7 +179,10 @@ size_t CutLoop::price(const SimplexResult& res, double& glb, RootLoopResult& out
     const auto tp = Clock::now();
     std::vector<NegEdge> neg;
     uint64_t cnt = 0;
-    glb = farley_bound(pricer_, cfg_.pricing_mode, inst_, g_, pool_, active_, res, cnt, &neg, farkas);
+    PricingFilter filter{&root_yp_, root_lb_, cutoff_};
+    const bool use_filter = !root_yp_.empty() && cutoff_ >= 0;
+    glb = farley_bound(pricer_, cfg_.pricing_mode, inst_, g_, pool_, active_, res, cnt, &neg, farkas,
+                       use_filter ? &filter : nullptr);
     out.pricing_s += secs(tp);
     ++out.pricing_calls;
     if (farkas) glb = -INFINITY;  // a ray proves nothing about the bound until it is clean
@@ -188,6 +208,7 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
     const uint32_t n = inst_.n;
     RootLoopResult out;
     bc_ = bc;
+    cutoff_ = lim.cutoff;
     if (warm) adopt(*warm);
     // Fresh LP every call: the matrix depends only on (graph, active rows), so a run resumed from
     // a checkpoint solves bit-identical LPs (also covers columns priced in by an early stop).
@@ -339,7 +360,12 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
     out.pool = pool_.stats();
     if (!out.infeasible && cfg_.compute_global_bound && !out.final.duals.empty()) {
         const auto tp = Clock::now();
-        out.global_lb = farley_bound(pricer_, cfg_.pricing_mode, inst_, g_, pool_, active_, out.final, out.negative_rc_edges);
+        // Same filter as the pricing rounds: a filtered pair is RCF-fixed to 0, it neither enters the
+        // LP nor lowers the bound (otherwise a node could never be decided: endless reopen).
+        PricingFilter filter{&root_yp_, root_lb_, cutoff_};
+        const bool use_filter = !root_yp_.empty() && cutoff_ >= 0;
+        out.global_lb = farley_bound(pricer_, cfg_.pricing_mode, inst_, g_, pool_, active_, out.final, out.negative_rc_edges,
+                                     nullptr, false, use_filter ? &filter : nullptr);
         ++out.pricing_calls;
         out.pricing_s += secs(tp);
     }

@@ -52,7 +52,7 @@ void pricing_filter_simd(double xu, double yu, double Yu, const double* xs, cons
 
 double EdgePricer::price(const std::vector<double>& ynode, const std::vector<CutDual>& cuts,
                          const std::unordered_set<uint64_t>& exclude, bool zero_cost, PricingMode mode,
-                         std::vector<NegEdge>* out, uint64_t& count) {
+                         std::vector<NegEdge>* out, uint64_t& count, const PricingFilter* filter) {
     const uint32_t n = inst_.n;
     ++stats_.calls;
     std::vector<double> sigma(n, 0.0), Yp(n);
@@ -74,6 +74,11 @@ double EdgePricer::price(const std::vector<double>& ynode, const std::vector<Cut
     auto exact = [&](uint32_t u, uint32_t v) {  // u < v
         ++stats_.exact_checks;
         if (exclude.count((uint64_t(u) << 32) | v)) return;
+        if (filter && std::ceil(filter->root_lb + dist(inst_, u, v) - (*filter->yroot)[u] - (*filter->yroot)[v] - 1e-6) >=
+                          static_cast<double>(filter->ub)) {
+            ++stats_.rcf_skipped;
+            return;
+        }
         double rc = (zero_cost ? 0.0 : dist(inst_, u, v)) - ynode[u] - ynode[v] - sigma[u] - sigma[v];
         const auto& a = member[u];
         const auto& b = member[v];

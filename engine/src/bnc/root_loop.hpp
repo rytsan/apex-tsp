@@ -123,6 +123,9 @@ public:
     const CutPool& pool() const { return pool_; }
     // Columns present when `b` was taken equal the current ones (no pricing since).
     bool same_columns(const NodeBasis& b) const { return b.basis.col.size() == g_.edges.size(); }
+    // Global RCF filter for pricing (tree, after the root): root duals -> Yroot_v (MASTER §5.5).
+    // Pairs it proves >= UB never enter as columns; the cutoff of each solve is the UB.
+    void set_root_filter(const SimplexResult& root_final, double root_lb);
 
 private:
     void build_lp();
@@ -145,6 +148,9 @@ private:
     Lp lp_;
     Basis basis_;
     bool warm_ = false;
+    std::vector<double> root_yp_;     // global RCF pricing filter (empty: off)
+    double root_lb_ = -INFINITY;
+    int64_t cutoff_ = -1;
     BoundChanges bc_;
 };
 

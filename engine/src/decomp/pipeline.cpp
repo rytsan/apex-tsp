@@ -71,15 +71,25 @@ PolishStats polish_tour(Tour& tour, const Instance& inst, const CandidateGraph& 
     st.start_cost = tour.cost;
     const bool timed = cfg.time_limit_s > 0;
     const uint32_t rounds = cfg.rounds ? cfg.rounds : (timed ? UINT32_MAX : 1);
-    if (cfg.threads <= 1 || n < 2 * cfg.segment_size) {  // whole tour, one thread
-        IlsConfig ic;
-        ic.seed = cfg.seed;
-        if (timed) ic.time_limit_s = cfg.time_limit_s;
-        else ic.max_iterations = cfg.iterations_per_node * n * rounds;
-        const auto is = iterated_local_search(tour, inst, g, ic);
+    if (cfg.threads <= 1 || n < 2 * cfg.segment_size) {  // whole tour: one ILS per thread, best kept
+        const uint32_t k = std::max(1u, cfg.threads);
+        std::vector<Tour> runs(k, tour);
+        std::vector<uint64_t> iters(k, 0);
+        parallel_for(k, k, [&](size_t r) {
+            IlsConfig ic;
+            ic.seed = r == 0 ? cfg.seed : mix64(cfg.seed ^ mix64(r));
+            ic.max_stall = cfg.stall_per_node * n;
+            if (timed) ic.time_limit_s = cfg.time_limit_s;
+            else ic.max_iterations = cfg.iterations_per_node * n * rounds;
+            iters[r] = iterated_local_search(runs[r], inst, g, ic).iterations;
+        });
+        size_t best = 0;
+        for (size_t r = 1; r < k; ++r)
+            if (runs[r].cost < runs[best].cost) best = r;
+        tour = std::move(runs[best]);
         st.rounds = 1;
         st.segments = 1;
-        st.iterations = is.iterations;
+        for (uint64_t x : iters) st.iterations += x;
     } else {
         st.parallel = true;
         const uint32_t k = (n + cfg.segment_size - 1) / cfg.segment_size;

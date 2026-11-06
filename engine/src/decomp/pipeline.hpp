@@ -3,7 +3,8 @@
 // heuristic: primal pipeline (M4.7). UB construction and improvement only; nothing here is a bound.
 //   construct: density clusters solved in parallel, merged level by level with re-evaluation
 //              (n > 2 * leaf size), else greedy edge + 2-opt / Or-opt;
-//   polish:    ILS; with threads > 1 and n >= 2 * segment size, the tour is cut into segments
+//   polish:    ILS (threads > 1 on a small instance: one independent ILS per thread, different
+//              seeds, best kept); with threads > 1 and n >= 2 * segment size, the tour is cut into segments
 //              of consecutive nodes, each improved in parallel as a path with fixed endpoints,
 //              segment boundaries shifted by half a segment every round;
 //   then the tour edges join the candidate graph and the tour is the UB the exact mode starts from.
@@ -31,6 +32,7 @@ struct PolishConfig {
     double time_limit_s = 0;          // total budget (0: use rounds x iterations_per_node)
     uint32_t rounds = 0;              // 0 with a time limit: until the budget is spent
     uint64_t iterations_per_node = 2; // per round, when no time limit (deterministic)
+    uint64_t stall_per_node = 0;      // whole-tour ILS stops after stall_per_node * n idle iterations (0 = off)
     uint64_t seed = 1;
 };
 

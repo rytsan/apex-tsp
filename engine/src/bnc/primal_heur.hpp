@@ -15,7 +15,7 @@
 namespace apex {
 
 struct DiveConfig {
-    uint32_t max_rounds = 5;          // dive rounds per node (0 = off)
+    uint32_t max_rounds = 0;          // dive rounds per node (0 = off; default off since M4.7, README §9)
     uint64_t pivots_per_round = 50;   // dual simplex iteration cap per re-solve
 };
 

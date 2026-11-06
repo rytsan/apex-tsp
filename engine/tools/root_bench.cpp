@@ -21,8 +21,9 @@ int main(int argc, char** argv) {
     try {
         std::string path;
         double ref = 0, time_limit = INFINITY;
-        bool tree = false, best_bound = false, resume = false, ils = false, hk = false;
+        bool tree = false, best_bound = false, resume = false, ils = false, hk = false, dive = false, no_rih = false;
         uint32_t parallel_lps = 1;
+        uint64_t mem_limit_mb = 4096;
         std::string checkpoint;
         apex::RootLoopConfig cfg;
         uint64_t seed = 1;
@@ -44,6 +45,9 @@ int main(int argc, char** argv) {
             else if (f == "--resume") resume = true;
             else if (f == "--ils") ils = true;
             else if (f == "--hk") hk = true;
+            else if (f == "--dive") dive = true;
+            else if (f == "--mem-limit-mb") mem_limit_mb = std::stoull(val());
+            else if (f == "--no-rih") no_rih = true;
             else if (f == "--sep-blossom") {
                 const auto v = val();
                 if (v == "full") cfg.blossom.mode = apex::BlossomMode::Full;
@@ -82,6 +86,9 @@ int main(int argc, char** argv) {
             bc.checkpoint_dir = checkpoint;
             bc.resume = resume;
             bc.seed = seed;
+            if (dive) bc.dive.max_rounds = 5;
+            bc.mem_limit_bytes = mem_limit_mb << 20;
+            if (no_rih) bc.rih_iterations = 0;
             std::unique_ptr<apex::BackgroundIls> bg;
             if (ils) {  // background ILS for the whole run (M4.1, UB only)
                 apex::IlsConfig ic;

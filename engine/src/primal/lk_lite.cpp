@@ -33,7 +33,7 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
     std::mt19937_64 rng(cfg.seed);
     const uint32_t seg = std::max(1u, std::min(cfg.max_segment, (n - 2) / 6));
     const std::vector<uint32_t> none;
-    uint64_t stall = 0, since_publish = 0;
+    uint64_t stall = 0, since_publish = 0, last_improvement = 0;
     bool dirty = true;
     auto timed_out = [&] {
         return cfg.time_limit_s > 0 && std::chrono::duration<double>(Clock::now() - t0).count() > cfg.time_limit_s;
@@ -41,6 +41,7 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
     while (cfg.max_iterations == 0 || st.iterations < cfg.max_iterations) {
         if (stop && stop->load(std::memory_order_relaxed)) break;
         if ((st.iterations & 15) == 0 && timed_out()) break;
+        if (cfg.max_stall && st.iterations - last_improvement >= cfg.max_stall) break;
         ++st.iterations;
         const int64_t before = tour.cost;
         ls.log_begin();
@@ -58,6 +59,7 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
         if (tour.cost < before) {
             ls.log_commit();
             ++st.improvements;
+            last_improvement = st.iterations;
             stall = 0;
             dirty = true;
         } else if (tour.cost == before) {

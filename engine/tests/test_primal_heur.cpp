@@ -31,6 +31,7 @@ TEST_CASE("T_diving_finds_tour_small") {
     cfg.lp_heuristic = false;
     cfg.rih_iterations = 0;
     cfg.max_nodes = 1000;
+    cfg.dive.max_rounds = 5;  // off by default (README §9)
     const auto res = apex::run_bnc(inst, g, cfg, apex::hilbert_tour(inst, apex::hilbert_order(inst)));
     CHECK(res.dive_calls > 0);
     CHECK(res.dive_tours > 0);
