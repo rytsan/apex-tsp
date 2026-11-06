@@ -64,7 +64,7 @@ size_t FtFactor::nnz() const {
 // Hypersparse traversal: visit keys (step ranks or step ids) from the seeds in increasing
 // (ascending = true) or decreasing order; `visit` may push more keys through `push`.
 #define APEX_FT_HEAP(ascending)                                                                          \
-    auto cmp = [](uint32_t a, uint32_t b) { return ascending ? a > b : a < b; };                        \
+    auto cmp = [](uint32_t x, uint32_t y) { return ascending ? x > y : x < y; };                        \
     auto push = [&](uint32_t key) {                                                                      \
         if (mark_[key]) return;                                                                          \
         mark_[key] = 1;                                                                                  \

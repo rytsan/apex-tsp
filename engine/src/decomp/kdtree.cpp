@@ -26,10 +26,10 @@ void build(const Instance& inst, std::vector<uint32_t> pts, uint32_t max_leaf, s
     size_t cut;
     if (density) {
         std::sort(pts.begin(), pts.end(), less);
-        const size_t n = pts.size(), lo = std::max<size_t>(1, n * 35 / 100), hi = std::min(n - 1, n * 65 / 100);
+        const size_t n = pts.size(), first = std::max<size_t>(1, n * 35 / 100), last = std::min(n - 1, n * 65 / 100);
         cut = n / 2;
         double best = -1;
-        for (size_t i = lo; i <= hi; ++i) {
+        for (size_t i = first; i <= last; ++i) {
             const double gap = c[pts[i]] - c[pts[i - 1]];
             const auto off = [&](size_t x) { return x > n / 2 ? x - n / 2 : n / 2 - x; };
             if (gap > best || (gap == best && off(i) < off(cut))) { best = gap; cut = i; }
