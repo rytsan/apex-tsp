@@ -14,6 +14,7 @@
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
 #include "graph/candidate_graph.hpp"
+#include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
 
 namespace {
@@ -72,6 +73,21 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                           {"moves_oropt", std::to_string(st.moves_oropt)}, {"rounds", std::to_string(st.rounds)},
                           {"neighbors", std::to_string(st.final_neighbors)},
                           {"time_limit_hit", st.time_limit_hit ? "true" : "false"}, {"ms", fmt(since(tl) * 1e3)}});
+
+    // ILS (M4.1, heuristic) fills the rest of the time budget; without --time-limit the run stops
+    // after 2-opt as before.
+    if (opt.time_limit_s > 0) {
+        apex::IlsConfig ic;
+        ic.seed = rng();
+        ic.time_limit_s = opt.time_limit_s - prior_wall - since(t0);
+        if (ic.time_limit_s > 0) {
+            const auto is = apex::iterated_local_search(tour, inst, g, ic);
+            tel.event("ils", {{"heuristic", "true"}, {"ub", std::to_string(tour.cost)},
+                              {"start", std::to_string(is.start_cost)}, {"iterations", std::to_string(is.iterations)},
+                              {"improvements", std::to_string(is.improvements)},
+                              {"strong_kicks", std::to_string(is.strong_kicks)}, {"ms", fmt(is.seconds * 1e3)}});
+        }
+    }
 
     if (apex::tour_cost(inst, tour) != tour.cost) throw std::runtime_error("internal error: tour cost drift");
 

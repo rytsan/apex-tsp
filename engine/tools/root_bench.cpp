@@ -1,8 +1,10 @@
 // Root cut-and-resolve transcript (Sprint 2 gates G2.1-G2.3, G2.5).
 // usage: root_bench --instance <file.tsp> --ref <best known> [--sep-blossom heuristic|full]
 //                   [--no-blossom] [--time-limit s] [--pricing devex|dse] [--seed n]
+//                   [--tree [--best-bound] [--parallel-lps k] [--checkpoint dir [--resume]] [--ils]]
 #include <cmath>
 #include <cstdio>
+#include <memory>
 #include <stdexcept>
 #include <string>
 
@@ -11,13 +13,14 @@
 #include "bnc/tree.hpp"
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
+#include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
 
 int main(int argc, char** argv) {
     try {
         std::string path;
         double ref = 0, time_limit = INFINITY;
-        bool tree = false, best_bound = false, resume = false;
+        bool tree = false, best_bound = false, resume = false, ils = false;
         uint32_t parallel_lps = 1;
         std::string checkpoint;
         apex::RootLoopConfig cfg;
@@ -38,6 +41,7 @@ int main(int argc, char** argv) {
             else if (f == "--parallel-lps") parallel_lps = static_cast<uint32_t>(std::stoul(val()));
             else if (f == "--checkpoint") checkpoint = val();
             else if (f == "--resume") resume = true;
+            else if (f == "--ils") ils = true;
             else if (f == "--sep-blossom") {
                 const auto v = val();
                 if (v == "full") cfg.blossom.mode = apex::BlossomMode::Full;
@@ -71,7 +75,21 @@ int main(int argc, char** argv) {
             bc.checkpoint_dir = checkpoint;
             bc.resume = resume;
             bc.seed = seed;
+            std::unique_ptr<apex::BackgroundIls> bg;
+            if (ils) {  // background ILS for the whole run (M4.1, UB only)
+                apex::IlsConfig ic;
+                ic.seed = seed;
+                bg = std::make_unique<apex::BackgroundIls>(inst, g, tour, ic);
+                bc.primal = bg.get();
+            }
             const auto r = apex::run_bnc(inst, g, bc, tour, &tel);
+            if (bg) {
+                bg->stop();
+                const auto is = bg->stats();
+                std::printf("\nILS iterations=%llu improvements=%llu strong_kicks=%llu best=%lld seconds=%.1f\n",
+                            static_cast<unsigned long long>(is.iterations), static_cast<unsigned long long>(is.improvements),
+                            static_cast<unsigned long long>(is.strong_kicks), static_cast<long long>(is.best_cost), is.seconds);
+            }
             std::printf("\nSUMMARY %s n=%u status=%s ub=%lld lb=%.4f lb_int=%lld gap=%.4f%% ref=%.0f\n", inst.name.c_str(), inst.n,
                         apex::status_name(r.status), static_cast<long long>(r.ub), r.lb, static_cast<long long>(r.lb_int),
                         100.0 * (r.ub - r.lb) / r.ub, ref);

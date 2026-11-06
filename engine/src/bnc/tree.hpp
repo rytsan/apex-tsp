@@ -25,12 +25,17 @@ struct BnCNode {
     double branch_frac = 0, parent_lp = 0;
 };
 
+class BackgroundIls;
+
 struct BnCConfig {
     RootLoopConfig root;                           // cut loop (also used at nodes)
     enum class Select { DiveThenBest, BestBound } select = Select::DiveThenBest;  // --node-select
     NodeLimits node;                               // per-node cut loop limits (cutoff set by the tree)
     BranchingConfig branching;
     bool lp_heuristic = true;                      // LP-guided tour at every fractional node (UB only)
+    // Background ILS (M4.1, UB only, not owned): polled at node boundaries. UB arrival depends on
+    // thread timing, so runs with it are not bitwise reproducible (proofs stay valid).
+    const BackgroundIls* primal = nullptr;
     uint32_t dive_depth_limit = 50;                // dive -> best-bound once a node this deep is processed
     std::string tour_path;                         // .tour rewritten atomically on every UB improvement
     double time_limit_s = INFINITY;                // --time-limit (anytime: in-flight node finishes)

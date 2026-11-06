@@ -4,6 +4,7 @@
 #include "bnc/checkpoint.hpp"
 #include "core/serial.hpp"
 #include "core/tour_io.hpp"
+#include "primal/lk_lite.hpp"
 #include "primal/lp_tour.hpp"
 
 #include <algorithm>
@@ -267,6 +268,7 @@ public:
         while (!open_.empty()) {
             if (elapsed() > cfg_.time_limit_s) { timed_out = true; break; }
             if (out_.nodes >= cfg_.max_nodes) break;
+            poll_primal();
             if (rcf_pending_) root_rcf();
             if (cfg_.parallel_lps > 1) batch(); else serial_step();
             if (!cfg_.checkpoint_dir.empty() && secs(last_ckpt_) >= cfg_.checkpoint_every_s) save();
@@ -508,6 +510,11 @@ private:
         if (!cfg_.tour_path.empty())
             write_tour_file(cfg_.tour_path, inst_, out_.best, "apex_tsp " + std::string(source) + " ub " + std::to_string(out_.ub));
         if (tel_) tel_->event("ub_improved", {{"nodes", std::to_string(out_.nodes)}, {"ub", std::to_string(out_.ub)}, {"source", source}});
+    }
+
+    void poll_primal() {
+        Tour t;
+        if (cfg_.primal && cfg_.primal->take_if_better(out_.ub, t)) offer(std::move(t), "ils");
     }
 
     void progress() {
