@@ -14,6 +14,7 @@
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
 #include "graph/candidate_graph.hpp"
+#include "decomp/patching.hpp"
 #include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
 
@@ -35,7 +36,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     tel.event("instance_loaded", {{"name", inst.name}, {"n", std::to_string(inst.n)},
                                   {"metric", apex::metric_name(inst.metric)}, {"ms", fmt(since(t0) * 1e3)}});
     tel.event("config", {{"mode", opt.mode}, {"seed", std::to_string(opt.seed)},
-                         {"threads", std::to_string(opt.threads)}, {"threads_used", "1"},
+                         {"threads", std::to_string(opt.threads)}, {"threads_used", std::to_string(opt.mode == "scalable" && inst.n > 2 * opt.leaf_size ? opt.threads : 1)},
                          {"mem_limit_mb", std::to_string(opt.mem_limit_mb)}, {"mem_limit_enforced", "false"},
                          {"time_limit_s", fmt(opt.time_limit_s)}, {"knn", std::to_string(opt.knn)}});
 
@@ -59,6 +60,25 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     tel.event("candidate_graph", {{"edges", std::to_string(g.edges.size())},
                                   {"fallback_edges", std::to_string(g.fallback_edges)},
                                   {"ms", fmt(since(tg) * 1e3)}});
+
+    // heuristic: KD-tree decomposition + patching gives the scalable-mode start tour (UB only;
+    // no bound from this phase exists or is used).
+    if (opt.mode == "scalable" && !opt.resume && inst.n > 2 * opt.leaf_size) {
+        apex::DecompConfig dc;
+        dc.max_leaf = opt.leaf_size;
+        dc.leaf.exact_limit = opt.leaf_exact_limit;
+        dc.leaf.threads = opt.threads;
+        dc.leaf.seed = rng();
+        apex::DecompStats ds;
+        auto dt = apex::decompose_and_patch(inst, g, dc, &ds);
+        tel.event("decomposition", {{"phase", "decomposition (heuristic)"}, {"heuristic", "true"},
+                                    {"leaves", std::to_string(ds.leaf.leaves)},
+                                    {"leaf_min", std::to_string(ds.leaf.min_size)}, {"leaf_max", std::to_string(ds.leaf.max_size)},
+                                    {"exact_leaves", std::to_string(ds.leaf.exact_leaves)},
+                                    {"patched", std::to_string(ds.patched_cost)}, {"ub", std::to_string(ds.final_cost)},
+                                    {"leaf_ms", fmt(ds.leaf_s * 1e3)}, {"patch_ms", fmt(ds.patch_s * 1e3)}});
+        if (dt.cost < tour.cost) tour = std::move(dt);
+    }
 
     apex::TwoOptConfig cfg;
     cfg.seed = rng();

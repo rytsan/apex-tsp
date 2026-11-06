@@ -26,12 +26,15 @@ struct Options {
     std::string checkpoint;         // directory
     bool resume = false;
     std::string report;             // .json
+    uint32_t leaf_size = 800;       // scalable mode: KD-tree leaf cap (decomposition, heuristic)
+    uint32_t leaf_exact_limit = 300;  // leaves this small use the exact mini B&C path
 };
 
 inline constexpr const char* kUsage =
     "usage: apex_tsp --instance <file.tsp> [--mode exact|scalable] [--time-limit <s>]\n"
     "                [--mem-limit-mb <n>] [--threads <n>] [--seed <n>] [--knn <n>]\n"
-    "                [--out <route.tour>] [--checkpoint <dir>] [--resume] [--report <report.json>]\n";
+    "                [--out <route.tour>] [--checkpoint <dir>] [--resume] [--report <report.json>]\n"
+    "                [--leaf-size <n>] [--leaf-exact-limit <n>]\n";
 
 namespace cli_detail {
 template <class T>
@@ -65,6 +68,8 @@ inline Options parse_cli(const std::vector<std::string>& args) {
         else if (f == "--checkpoint") o.checkpoint = value();
         else if (f == "--resume") o.resume = true;
         else if (f == "--report") o.report = value();
+        else if (f == "--leaf-size") o.leaf_size = number<uint32_t>(f, value());
+        else if (f == "--leaf-exact-limit") o.leaf_exact_limit = number<uint32_t>(f, value());
         else throw CliError("unknown flag '" + f + "'");
     }
     if (o.instance.empty()) throw CliError("--instance is required");
@@ -72,6 +77,7 @@ inline Options parse_cli(const std::vector<std::string>& args) {
     if (o.time_limit_s < 0) throw CliError("--time-limit must be >= 0");
     if (o.threads == 0) throw CliError("--threads must be >= 1");
     if (o.knn == 0) throw CliError("--knn must be >= 1");
+    if (o.leaf_size < 8) throw CliError("--leaf-size must be >= 8");
     if (o.mem_limit_mb == 0) throw CliError("--mem-limit-mb must be >= 1");
     if (o.resume && o.checkpoint.empty()) throw CliError("--resume requires --checkpoint <dir>");
     return o;

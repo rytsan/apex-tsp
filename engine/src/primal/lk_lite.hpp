@@ -5,6 +5,7 @@
 #include <functional>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "core/instance.hpp"
 #include "graph/candidate_graph.hpp"
@@ -37,6 +38,11 @@ struct IlsStats {
 IlsStats iterated_local_search(Tour& tour, const Instance& inst, const CandidateGraph& g, const IlsConfig& cfg,
                                const std::atomic<bool>* stop = nullptr,
                                const std::function<void(const Tour&)>& on_best = nullptr);
+
+// LK-lite + Or-opt descent started from `start` nodes only (don't-look bits elsewhere): local
+// cleanup after a patch. Returns the number of improving moves.
+uint64_t lk_descent(Tour& tour, const Instance& inst, const CandidateGraph& g, const std::vector<uint32_t>& start,
+                    uint32_t lk_depth = 5);
 
 // ILS in a background thread for the engine lifetime (owns a copy of the candidate graph: the
 // B&C graph grows under pricing). Improvements are published under a mutex; consumers poll at

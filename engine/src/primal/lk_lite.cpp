@@ -78,6 +78,17 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
     return st;
 }
 
+uint64_t lk_descent(Tour& tour, const Instance& inst, const CandidateGraph& g, const std::vector<uint32_t>& start,
+                    uint32_t lk_depth) {
+    if (tour.order.size() < 8) return 0;
+    uint32_t k_max = 0;
+    for (uint32_t i = 0; i < g.n; ++i) k_max = std::max(k_max, g.adj_start[i + 1] - g.adj_start[i]);
+    detail::LocalSearch ls(tour, inst, g);
+    ls.set_lk_depth(lk_depth);
+    TwoOptStats ts;
+    return ls.round(k_max, true, start, std::chrono::steady_clock::time_point{}, false, ts);
+}
+
 BackgroundIls::BackgroundIls(const Instance& inst, CandidateGraph g, Tour start, IlsConfig cfg)
     : inst_(inst), g_(std::move(g)), cfg_(cfg), work_(std::move(start)), best_(work_) {
     best_.cost = tour_cost(inst_, best_);
