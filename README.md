@@ -246,3 +246,25 @@ Transcripts: [`docs/SPRINT2_ROOT.md`](docs/SPRINT2_ROOT.md). The LB is the fully
 | G2.4 Sprint 2 tests | green |
 | G2.5 LB <= best known on all runs | yes (ratios above) |
 | G2.6 ASan + UBSan | clean |
+
+## 13. Sprint 3 results (hardware: AMD Ryzen 5 3600X, 5 physical cores visible under WSL2, 25 GB RAM, GCC 13.3, preset `benchmark`)
+
+Transcripts: [`docs/SPRINT3_BNC.md`](docs/SPRINT3_BNC.md). Commit `e9f7235`, CI green.
+
+| Instance | Status | UB | LB | Gap | Nodes | Time | Peak RSS |
+|---|---|---|---|---|---|---|---|
+| eil51 | OPTIMAL_PROVEN | 426 | 426 | 0 | 2 | 0.02 s | 4.4 MB |
+| berlin52 | OPTIMAL_PROVEN | 7542 | 7542 | 0 | 1 | 0.00 s | 4.2 MB |
+| a280 | OPTIMAL_PROVEN | 2579 | 2579 | 0 | 9 | 0.15 s | 6.6 MB |
+| pr1002 (2 LPs) | TIME_LIMIT 1800 s | 259051 | 259020.82 | 0.0117% | 4871 | 1804 s | 1152 MB |
+| fl3795 (2 LPs) | TIME_LIMIT 3600 s | 29271 | 28571.28 | 2.3905% | 93 | 3610 s | 1903 MB |
+
+| Gate | Result |
+|---|---|
+| G3.1 optimality proven in limits | **MISS**: eil51 / berlin52 / a280 proven; pr1002 and fl3795 not proven |
+| G3.2 certificate integrity | OK on all 5 runs (UB == recomputed tour cost, LB <= optimum; LB_int == UB on proven runs) |
+| G3.3 `T_rcf_never_prunes_optimal_edge` | green, 20 instances, 450 fixings at UB = opt |
+| G3.4 `T_verification_pricing_planted_edge` | green, 6 removed / 6 priced back |
+| G3.5 checkpoint equivalence | green (eil51 / a280, see §9 row) plus parallel resume |
+| G3.6 pr1002 throughput | 2.70 nodes/s, LP 61.3% of time (2 parallel LPs) |
+| G3.7 ASan + UBSan, determinism | clean; a280 logs bitwise identical over 2 runs, serial and parallel |
