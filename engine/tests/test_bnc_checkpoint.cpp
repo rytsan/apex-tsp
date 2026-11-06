@@ -127,7 +127,7 @@ TEST_CASE("T_parallel_tree_deterministic") {
         MESSAGE(std::string(name) << " parallel nodes=" << r1.nodes << " batches=" << r1.batches);
     }
     apex::BnCConfig bad;
-    bad.parallel_lps = 3;
+    bad.parallel_lps = 7;  // M4.5: 1..6
     CHECK_THROWS_AS(run(load("eil51"), bad), std::invalid_argument);
 }
 

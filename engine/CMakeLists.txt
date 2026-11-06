@@ -40,6 +40,7 @@ add_library(apex_core STATIC
     src/decomp/leaf_solver.cpp
     src/decomp/patching.cpp
     src/hk/held_karp.cpp
+    src/app/mem.cpp
     src/bnc/checkpoint.cpp
     src/lp/csc.cpp
     src/lp/lu.cpp
@@ -93,9 +94,11 @@ add_executable(engine_tests
     tests/test_lk.cpp
     tests/test_primal_heur.cpp
     tests/test_decomp.cpp
-    tests/test_held_karp.cpp)
+    tests/test_held_karp.cpp
+    tests/test_mem.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
-target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
+target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}" APEX_BIN="$<TARGET_FILE:engine>")
+add_dependencies(engine_tests engine)
 target_link_libraries(engine_tests PRIVATE apex_core)
 add_test(NAME engine_tests COMMAND engine_tests)
 

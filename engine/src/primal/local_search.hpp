@@ -35,17 +35,37 @@ public:
     void set_lk_depth(uint32_t depth) { lk_depth_ = depth; }
     uint64_t lk_moves() const { return lk_moves_; }
 
-    // Undo log: while on, every array write is recorded and rollback() restores the tour exactly.
-    void log_begin() { logging_ = true; log_.clear(); cost_mark_ = t_.cost; }
-    void log_commit() { logging_ = false; log_.clear(); }
+    // Undo log: while on, array writes are recorded and rollback() restores the tour exactly.
+    // The log holds at most n writes; past that it overflows and rollback copies the mirror (the
+    // tour at the last commit, kept in sync from the log). Memory stays O(n).
+    void log_begin() {
+        if (mirror_.empty()) mirror_ = t_.order;
+        logging_ = true;
+        overflow_ = false;
+        log_.clear();
+        cost_mark_ = t_.cost;
+    }
+    void log_commit() {
+        if (overflow_) mirror_ = t_.order;
+        else
+            for (const auto& w : log_) mirror_[w.i] = w.v;
+        logging_ = overflow_ = false;
+        log_.clear();
+    }
     void rollback() {
-        for (size_t k = log_.size(); k-- > 0;) {
-            const auto& w = log_[k];
-            pos_[w.v] = w.old_pos;
-            t_.order[w.i] = w.old_val;
+        if (overflow_) {
+            t_.order = mirror_;
+            for (uint32_t k = 0; k < n_; ++k) pos_[t_.order[k]] = k;
+        } else {
+            for (size_t k = log_.size(); k-- > 0;) {
+                const auto& w = log_[k];
+                pos_[w.v] = w.old_pos;
+                t_.order[w.i] = w.old_val;
+            }
         }
         t_.cost = cost_mark_;
-        log_commit();
+        logging_ = overflow_ = false;
+        log_.clear();
     }
 
     // Segment-local double bridge: a [B: l1 nodes][C: l2 nodes] e  ->  a C B e, B starting at
@@ -90,7 +110,10 @@ private:
 
     void put(uint32_t at, uint32_t v) {
         at %= n_;
-        if (logging_) log_.push_back({at, t_.order[at], v, pos_[v]});
+        if (logging_ && !overflow_) {
+            if (log_.size() >= n_) { overflow_ = true; log_.clear(); }
+            else log_.push_back({at, t_.order[at], v, pos_[v]});
+        }
         t_.order[at] = v;
         pos_[v] = at;
     }
@@ -280,8 +303,9 @@ private:
     std::vector<uint8_t> queued_;
     std::deque<uint32_t> queue_;
     std::vector<uint32_t> chain_, seg_;
-    bool logging_ = false;
+    bool logging_ = false, overflow_ = false;
     std::vector<Write> log_;
+    std::vector<uint32_t> mirror_;
     int64_t cost_mark_ = 0;
 };
 

@@ -1,14 +1,16 @@
 // APEX-TSP engine entry point (Sprint 0: scalable mode = primal engine only).
-#include <optional>
 #include <chrono>
 #include <cstdio>
 #include <exception>
+#include <new>
+#include <optional>
 #include <random>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "app/cli.hpp"
+#include "app/mem.hpp"
 #include "app/telemetry.hpp"
 #include "bnc/checkpoint.hpp"
 #include "core/instance.hpp"
@@ -34,12 +36,15 @@ std::string fmt(double v, int prec = 3) {
 
 int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     const auto t0 = Clock::now();
+    const uint64_t mem_limit = opt.mem_limit_mb << 20;
+    const auto enf = apex::enforce_memory_limit(mem_limit);  // OS backstop; the guards below stop first
     const auto inst = apex::read_tsplib(opt.instance);
     tel.event("instance_loaded", {{"name", inst.name}, {"n", std::to_string(inst.n)},
                                   {"metric", apex::metric_name(inst.metric)}, {"ms", fmt(since(t0) * 1e3)}});
     tel.event("config", {{"mode", opt.mode}, {"seed", std::to_string(opt.seed)},
                          {"threads", std::to_string(opt.threads)}, {"threads_used", std::to_string(opt.mode == "scalable" && inst.n > 2 * opt.leaf_size ? opt.threads : 1)},
-                         {"mem_limit_mb", std::to_string(opt.mem_limit_mb)}, {"mem_limit_enforced", "false"},
+                         {"mem_limit_mb", std::to_string(opt.mem_limit_mb)}, {"mem_limit_enforced", enf.enforced ? "true" : "false"},
+                         {"mem_limit_method", enf.method},
                          {"time_limit_s", fmt(opt.time_limit_s)}, {"knn", std::to_string(opt.knn)}});
 
     std::mt19937_64 rng(opt.seed);
@@ -57,8 +62,16 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
         tel.event("ub0", {{"source", "hilbert"}, {"ub", std::to_string(tour.cost)}, {"ms", fmt(since(t0) * 1e3)}});
     }
 
+    // Graceful MEM_LIMIT (M4.5): guards at phase boundaries (RSS >= 90% of --mem-limit-mb) and
+    // allocation failures under the OS cap both end in: best tour so far -> checkpoint + report.
+    apex::Tour best = tour;
+    std::string status = "done";
+    std::optional<int64_t> lb;
+    try {
+    apex::check_memory(mem_limit, "start");
     const auto tg = Clock::now();
     const auto g = apex::build_candidate_graph(inst, {opt.knn, true});
+    apex::check_memory(mem_limit, "candidate_graph");
     tel.event("candidate_graph", {{"edges", std::to_string(g.edges.size())},
                                   {"fallback_edges", std::to_string(g.fallback_edges)},
                                   {"ms", fmt(since(tg) * 1e3)}});
@@ -80,6 +93,8 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                                     {"patched", std::to_string(ds.patched_cost)}, {"ub", std::to_string(ds.final_cost)},
                                     {"leaf_ms", fmt(ds.leaf_s * 1e3)}, {"patch_ms", fmt(ds.patch_s * 1e3)}});
         if (dt.cost < tour.cost) tour = std::move(dt);
+        best = tour;
+        apex::check_memory(mem_limit, "decomposition");
     }
 
     apex::TwoOptConfig cfg;
@@ -95,10 +110,11 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                           {"moves_oropt", std::to_string(st.moves_oropt)}, {"rounds", std::to_string(st.rounds)},
                           {"neighbors", std::to_string(st.final_neighbors)},
                           {"time_limit_hit", st.time_limit_hit ? "true" : "false"}, {"ms", fmt(since(tl) * 1e3)}});
+    best = tour;
+    apex::check_memory(mem_limit, "two_opt");
 
     // Held-Karp (M4.4): Lagrangian LB of the scalable mode (lb_source lagrangian); ascent gets
     // 10% of the remaining budget, the exact complete-graph 1-tree comes on top.
-    std::optional<int64_t> lb;
     if (opt.mode == "scalable" && opt.time_limit_s > 0) {
         apex::HkConfig hc;
         hc.time_limit_s = 0.1 * (opt.time_limit_s - prior_wall - since(t0));
@@ -109,6 +125,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                                     {"iterations", std::to_string(hk.iterations)},
                                     {"ascent_ms", fmt(hk.ascent_s * 1e3)}, {"exact_ms", fmt(hk.exact_s * 1e3)}});
         }
+        apex::check_memory(mem_limit, "held_karp");
     }
 
     // ILS (M4.1, heuristic) fills the rest of the time budget; without --time-limit the run stops
@@ -124,6 +141,17 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                               {"improvements", std::to_string(is.improvements)},
                               {"strong_kicks", std::to_string(is.strong_kicks)}, {"ms", fmt(is.seconds * 1e3)}});
         }
+    }
+
+    best = tour;
+    } catch (const std::exception& e) {
+        const bool alloc = dynamic_cast<const std::bad_alloc*>(&e) != nullptr;
+        if (!alloc && !dynamic_cast<const apex::MemLimitExceeded*>(&e)) throw;
+        status = "MEM_LIMIT";
+        tour = best;
+        tel.event("mem_limit", {{"status", "MEM_LIMIT"}, {"cause", alloc ? "allocation_failed" : "budget"},
+                                {"msg", e.what()}, {"rss_bytes", std::to_string(apex::current_rss_bytes())},
+                                {"limit_bytes", std::to_string(mem_limit)}, {"ub", std::to_string(tour.cost)}});
     }
 
     if (apex::tour_cost(inst, tour) != tour.cost) throw std::runtime_error("internal error: tour cost drift");
@@ -154,16 +182,17 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     rep.seed = opt.seed;
     rep.threads = 1;
     rep.ram_peak_bytes = apex::peak_rss_bytes();
+    rep.status = status;
     if (lb) {
         rep.lb = *lb;
         rep.lb_source = "lagrangian";
     }
     if (!opt.report.empty()) apex::write_report_file(opt.report, rep);
-    tel.event("done", {{"mode", opt.mode}, {"ub", std::to_string(tour.cost)}, {"lb", lb ? std::to_string(*lb) : "null"},
+    tel.event("done", {{"status", status}, {"mode", opt.mode}, {"ub", std::to_string(tour.cost)}, {"lb", lb ? std::to_string(*lb) : "null"},
                        {"gap_pct", lb ? fmt(100.0 * (tour.cost - *lb) / tour.cost, 4) : "null"},
                        {"lb_source", lb ? "lagrangian" : "null"}, {"wall_s", fmt(wall)},
                        {"ram_peak_bytes", std::to_string(rep.ram_peak_bytes)}});
-    return 0;
+    return status == "done" ? 0 : 4;
 }
 
 }  // namespace

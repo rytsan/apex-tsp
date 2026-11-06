@@ -50,10 +50,14 @@ struct BnCConfig {
     double checkpoint_every_s = 300;               // also written whenever the run stops early
     bool resume = false;                           // --resume: continue from checkpoint_dir (initial tour ignored)
     uint64_t seed = 1;                             // recorded in the manifest
-    // Parallel tree (M3.6): nodes processed in deterministic batches of parallel_lps workers, each on
-    // a snapshot of the shared state, merged in worker order. 1 = serial. Capped at 2 in Sprint 3.
-    uint32_t parallel_lps = 1;                     // --parallel-lps
-    uint64_t ram_cap_bytes = uint64_t(2) << 30;    // peak RSS asserted below this with parallel_lps > 1
+    // Parallel tree (M3.6): nodes processed in deterministic batches of up to parallel_lps workers,
+    // each on a snapshot of the shared state, merged in worker order. 1 = serial.
+    uint32_t parallel_lps = 1;                     // --parallel-lps (1..6)
+    // Memory budget (M4.5): each batch runs min(parallel_lps, tokens) LPs, tokens =
+    // (mem_limit - baseline) / LP working set, both estimated from live structure sizes (graph,
+    // pool, frontier, LP nnz, factorization nnz), so the schedule is deterministic. 0 tokens, or
+    // RSS above the limit (safety net), stops the run gracefully: checkpoint + MEM_LIMIT.
+    uint64_t mem_limit_bytes = uint64_t(4) << 30;  // --mem-limit-mb
     BnCConfig() {
         node.max_rounds = 100;
         node.tailing_window = 10;
@@ -62,7 +66,7 @@ struct BnCConfig {
 };
 
 struct BnCResult {
-    enum class Status { Optimal, TimeLimit, NodeLimit } status = Status::Optimal;
+    enum class Status { Optimal, TimeLimit, NodeLimit, MemLimit } status = Status::Optimal;
     Tour best;                       // best tour found (cost recomputed with the metric)
     int64_t ub = 0;
     double lb = -INFINITY;           // global: min over open nodes (== ub at proof)
@@ -83,6 +87,9 @@ struct BnCResult {
     RootLoopResult root;
     std::vector<uint32_t> processing_order;  // node ids in processing order (determinism tests)
     uint64_t checkpoints_written = 0, batches = 0;
+    // Memory budget (M4.5)
+    uint32_t max_concurrent_lps = 0, min_lp_tokens = UINT32_MAX;
+    uint64_t lp_budget_violations = 0, lp_working_set_bytes = 0, budget_baseline_bytes = 0;
     double elapsed_s = 0;            // wall clock accumulated across resumed runs
 };
 

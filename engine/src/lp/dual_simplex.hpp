@@ -60,6 +60,7 @@ struct SimplexResult {
     // LP stays infeasible after adding any such columns (Farkas pricing, MASTER §5.6).
     std::vector<double> farkas;
     uint32_t initial_dual_flips = 0;  // nonbasic moves needed to make the start dual feasible
+    uint64_t peak_factor_nnz = 0;     // max nnz(L) + nnz(U) over the refactorizations (memory budget)
 };
 
 // Bounded dual simplex: Devex/DSE pricing, Harris two-pass ratio test + BFRT,

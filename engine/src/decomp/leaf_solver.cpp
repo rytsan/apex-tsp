@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <exception>
 #include <thread>
 
 #include "bnc/tree.hpp"
@@ -72,7 +73,9 @@ std::vector<std::vector<uint32_t>> solve_leaves(const Instance& inst, const std:
     std::vector<std::vector<uint32_t>> out(tree.size());
     std::vector<uint8_t> exact(leaves.size(), 0), proven(leaves.size(), 0);
     std::atomic<size_t> next{0};
-    auto work = [&] {
+    std::vector<std::exception_ptr> err(std::max(1u, cfg.threads));
+    auto work = [&](uint32_t tid) {
+        try {
         for (size_t i; (i = next.fetch_add(1)) < leaves.size();) {
             const auto& ids = tree[leaves[i]].points;
             bool ex = false, pr = false;
@@ -82,12 +85,18 @@ std::vector<std::vector<uint32_t>> solve_leaves(const Instance& inst, const std:
             exact[i] = ex;
             proven[i] = pr;
         }
+        } catch (...) {  // e.g. std::bad_alloc under the memory cap: rethrown on the caller's thread
+            err[tid] = std::current_exception();
+            next.store(leaves.size());
+        }
     };
     const uint32_t nt = std::max(1u, std::min<uint32_t>(cfg.threads, static_cast<uint32_t>(leaves.size())));
     std::vector<std::thread> pool;
-    for (uint32_t t = 1; t < nt; ++t) pool.emplace_back(work);
-    work();
+    for (uint32_t t = 1; t < nt; ++t) pool.emplace_back(work, t);
+    work(0);
     for (auto& th : pool) th.join();
+    for (auto& e : err)
+        if (e) std::rethrow_exception(e);
     if (stats) {
         *stats = LeafStats{};
         stats->leaves = static_cast<uint32_t>(leaves.size());

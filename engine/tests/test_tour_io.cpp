@@ -70,7 +70,7 @@ TEST_CASE("T_report_json") {
     apex::write_report_json(a, r);
     CHECK(a.str() ==
           "{\"instance\":\"mona \\\"lisa\\\"\\n\",\"mode\":\"scalable\",\"ub\":5938927,\"lb\":null,"
-          "\"gap_pct\":null,\"lb_source\":null,\"wall_s\":1.235,\"seed\":42,\"threads\":1,\"ram_peak_bytes\":123}\n");
+          "\"gap_pct\":null,\"lb_source\":null,\"wall_s\":1.235,\"seed\":42,\"threads\":1,\"ram_peak_bytes\":123,\"status\":\"done\"}\n");
     r.lb = 5757084;
     r.lb_source = "lp";
     std::ostringstream b;

@@ -59,6 +59,7 @@ struct RootLoopResult {
     uint64_t negative_rc_edges = 0;  // non-candidate edges with negative reduced cost (final)
     uint32_t pricing_rounds = 0;
     uint32_t first_dual_flips = 0;
+    uint64_t peak_factor_nnz = 0;    // max LU nnz over the solves (memory budget estimate)
     uint64_t pricing_calls = 0;      // complete-graph pricing passes (each one a verification)   // initial dual-feasibility repairs of the first solve (warm-start check)
     uint64_t priced_edges = 0;       // columns added by pricing (status kNewPricing)
     uint32_t rcf_fixed0 = 0, rcf_fixed1 = 0;

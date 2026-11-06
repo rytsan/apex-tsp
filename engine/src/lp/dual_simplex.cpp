@@ -343,6 +343,7 @@ public:
         res.perturbed = perturbed_;
         res.farkas = farkas_;
         res.initial_dual_flips = initial_flips_;
+        res.peak_factor_nnz = peak_factor_nnz_;
         return res;
     }
 
@@ -389,7 +390,9 @@ private:
             std::vector<SparseCol> cols(m_);
             for (uint32_t p = 0; p < m_; ++p) for_col(head_[p], [&](uint32_t i, double v) { cols[p].push_back({i, v}); });
             ++refacts_;
-            if (fac_.factorize(m_, cols)) return;
+            const bool ok = fac_.factorize(m_, cols);
+            peak_factor_nnz_ = std::max<uint64_t>(peak_factor_nnz_, fac_.lu().nnz_factors());
+            if (ok) return;
             // Singular basis: replace unpivoted positions by logicals of unpivoted rows.
             const auto sp = fac_.lu().singular_positions();
             const auto ur = fac_.lu().unpivoted_rows();
@@ -634,6 +637,7 @@ private:
     uint64_t it_ = 0, primal_it_ = 0, refacts_ = 0, bound_flips_ = 0;
     std::vector<double> farkas_;
     uint32_t initial_flips_ = 0;
+    uint64_t peak_factor_nnz_ = 0;
     bool infeasible_bounds_ = false, used_art_ = false, perturbed_ = false, shifted_ = false, force_refactor_ = false;
 };
 

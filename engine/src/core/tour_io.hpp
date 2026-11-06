@@ -30,6 +30,7 @@ struct Report {
     uint64_t seed = 0;
     uint32_t threads = 1;
     uint64_t ram_peak_bytes = 0;
+    std::string status = "done";        // "done" | "MEM_LIMIT"
 };
 
 // gap_pct = 100 * (ub - lb) / ub when lb is present, else null.

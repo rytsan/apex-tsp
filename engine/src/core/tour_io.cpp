@@ -171,7 +171,9 @@ void write_report_json(std::ostream& out, const Report& r) {
     if (r.lb_source) json_string(out, *r.lb_source); else out << "null";
     std::snprintf(num, sizeof num, "%.3f", r.wall_s);
     out << ",\"wall_s\":" << num << ",\"seed\":" << r.seed << ",\"threads\":" << r.threads
-        << ",\"ram_peak_bytes\":" << r.ram_peak_bytes << "}\n";
+        << ",\"ram_peak_bytes\":" << r.ram_peak_bytes << ",\"status\":";
+    json_string(out, r.status);
+    out << "}\n";
 }
 
 void write_report_file(const std::string& path, const Report& r) {

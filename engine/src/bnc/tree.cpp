@@ -1,6 +1,7 @@
 #include "bnc/tree.hpp"
 
 #include "bnc/rcf.hpp"
+#include "app/mem.hpp"
 #include "bnc/checkpoint.hpp"
 #include "core/serial.hpp"
 #include "core/tour_io.hpp"
@@ -45,6 +46,7 @@ const char* status_name(BnCResult::Status s) {
         case BnCResult::Status::Optimal: return "OPTIMAL_PROVEN";
         case BnCResult::Status::TimeLimit: return "TIME_LIMIT";
         case BnCResult::Status::NodeLimit: return "NODE_LIMIT";
+        case BnCResult::Status::MemLimit: return "MEM_LIMIT";
     }
     return "?";
 }
@@ -99,6 +101,7 @@ struct NodeOutcome {
     bool found_integral = false, warm = false, warm_dual_bad = false;
     double lp_s = 0, sep_s = 0, pricing_s = 0, heuristic_s = 0;
     uint64_t dive_calls = 0, dive_tours = 0, dive_pivots = 0;
+    uint64_t peak_factor_nnz = 0, lp_nnz = 0;  // memory budget inputs
     uint64_t pricing_calls = 0, priced = 0, heuristic_calls = 0, strong_pivots = 0, strong_candidates = 0, rcf_node_fixings = 0;
 };
 
@@ -193,6 +196,8 @@ NodeOutcome process_node(const Instance& inst, CandidateGraph& g, CutLoop& loop,
         pc.observe(static_cast<uint32_t>(node.branch_edge), node.branch_dir, gain);
         o.obs.push_back({static_cast<uint32_t>(node.branch_edge), node.branch_dir, gain});
     }
+    o.peak_factor_nnz = r.peak_factor_nnz;
+    o.lp_nnz = loop.lp().A.nnz();
     conclude(inst, g, loop, pc, cfg, r, node, ub, o);
     return o;
 }
@@ -260,9 +265,8 @@ NodeBasis load_basis(std::istream& in) {
 class Tree {
 public:
     Tree(const Instance& inst, CandidateGraph& g, const BnCConfig& cfg, TelemetrySink* tel)
-        : inst_(inst), g_(g), cfg_(cfg), tel_(tel), loop_(inst, g, cfg.root, tel) {
-        if (cfg.parallel_lps < 1 || cfg.parallel_lps > 2)
-            throw std::invalid_argument("--parallel-lps must be 1 or 2 in Sprint 3 (memory-aware scheduler: Sprint 4)");
+        : inst_(inst), g_(g), cfg_(cfg), tel_(tel), loop_(inst, g, cfg.root, tel), budget_(cfg.mem_limit_bytes, 6) {
+        if (cfg.parallel_lps < 1 || cfg.parallel_lps > 6) throw std::invalid_argument("--parallel-lps must be 1..6");
     }
 
     BnCResult run(Tour initial) {
@@ -277,13 +281,15 @@ public:
             root();
         }
         last_ckpt_ = Clock::now();
-        bool timed_out = false;
+        bool timed_out = false, mem_limited = false;
         while (!open_.empty()) {
             if (elapsed() > cfg_.time_limit_s) { timed_out = true; break; }
             if (out_.nodes >= cfg_.max_nodes) break;
             poll_primal();
             if (rcf_pending_) root_rcf();
-            if (cfg_.parallel_lps > 1) batch(); else serial_step();
+            const uint32_t w = schedule();
+            if (w == 0 || current_rss_bytes() > cfg_.mem_limit_bytes) { mem_limited = true; break; }
+            if (cfg_.parallel_lps > 1) batch(w); else serial_step();
             if (!cfg_.checkpoint_dir.empty() && secs(last_ckpt_) >= cfg_.checkpoint_every_s) save();
         }
         if (!open_.empty() && elapsed() > cfg_.time_limit_s) timed_out = true;
@@ -292,7 +298,12 @@ public:
         for (const auto& nd : open_) out_.lb = std::min(out_.lb, nd.dual_bound);
         out_.lb_int = static_cast<int64_t>(std::ceil(out_.lb - 1e-6));
         out_.status = open_.empty() ? BnCResult::Status::Optimal
-                                    : (timed_out ? BnCResult::Status::TimeLimit : BnCResult::Status::NodeLimit);
+                      : mem_limited ? BnCResult::Status::MemLimit
+                      : (timed_out ? BnCResult::Status::TimeLimit : BnCResult::Status::NodeLimit);
+        out_.max_concurrent_lps = budget_.max_concurrent();
+        out_.lp_budget_violations = budget_.violations();
+        out_.lp_working_set_bytes = budget_.lp_working_set();
+        out_.budget_baseline_bytes = budget_.baseline();
         out_.elapsed_s = elapsed();
         out_.total_s = secs(t0_);
         if (tel_)
@@ -305,7 +316,10 @@ public:
                                      {"certificate", out_.status == BnCResult::Status::Optimal && out_.lb_int == out_.ub &&
                                                              tour_cost(inst_, out_.best) == out_.ub ? "ok" : "none"},
                                      {"parallel_lps", std::to_string(cfg_.parallel_lps)},
-                                     {"open_bytes", std::to_string(open_bytes())}, {"pool_cuts", std::to_string(loop_.pool().size())},
+                                     {"open_bytes", std::to_string(open_bytes())},
+                                     {"lp_working_set_bytes", std::to_string(out_.lp_working_set_bytes)},
+                                     {"max_concurrent_lps", std::to_string(out_.max_concurrent_lps)},
+                                     {"min_lp_tokens", std::to_string(out_.min_lp_tokens)}, {"pool_cuts", std::to_string(loop_.pool().size())},
                                      {"edges", std::to_string(g_.edges.size())},
                                      {"checkpoints", std::to_string(out_.checkpoints_written)},
                                      {"lp_s", fmt(out_.lp_s, 2)}, {"sep_s", fmt(out_.sep_s, 2)},
@@ -328,6 +342,30 @@ private:
         return b;
     }
 
+    // ---- memory budget (M4.5): deterministic size estimates, no RSS reads ----
+    uint64_t model_bytes() const {  // graph + pool + pseudocosts: one copy per LP worker
+        uint64_t b = g_.edges.size() * (sizeof(Edge) + 8) + (uint64_t(g_.n) + 1) * 4 + g_.edges.size() * 24;
+        const auto& pool = loop_.pool();
+        for (size_t k = 0; k < pool.size(); ++k)
+            b += sizeof(PoolCut) + 4 * pool.at(k).nodes.size() + 8 * pool.at(k).teeth.size();
+        return b;
+    }
+    uint64_t lp_bytes() const {  // LP matrix (CSC + CSR) + simplex vectors + LU and eta file
+        return lp_nnz_ * 24 + (g_.edges.size() + loop_.pool().size() + g_.n) * 80 + peak_factor_ * 36;
+    }
+    uint32_t schedule() {
+        static constexpr uint64_t kProcess = uint64_t(64) << 20;  // code, instance, telemetry, allocator slack
+        const uint64_t baseline = kProcess + uint64_t(inst_.n) * 64 + model_bytes() + open_bytes();
+        budget_.update(baseline, model_bytes() + lp_bytes());
+        const uint32_t w = std::min(cfg_.parallel_lps, budget_.tokens());
+        out_.min_lp_tokens = std::min(out_.min_lp_tokens, budget_.tokens());
+        return w;
+    }
+    void note_sizes(const NodeOutcome& o) {
+        peak_factor_ = std::max(peak_factor_, o.peak_factor_nnz);
+        lp_nnz_ = std::max(lp_nnz_, o.lp_nnz);
+    }
+
     // Root: cut-and-price with the root limits; its outcome is applied like any node's, then the
     // permanent root RCF runs against the (possibly improved) UB.
     void root() {
@@ -336,9 +374,13 @@ private:
         lim.tailing_window = cfg_.root.tailing_window;
         lim.tailing_rel = cfg_.root.tailing_rel;
         lim.time_limit_s = cfg_.time_limit_s;
+        budget_.acquire();
         out_.root = loop_.solve({}, nullptr, lim);
+        budget_.release();
         if (out_.root.infeasible) throw std::logic_error("bnc: root LP infeasible over the complete graph");
         out_.root_lb = out_.root.global_lb;
+        peak_factor_ = out_.root.peak_factor_nnz;
+        lp_nnz_ = loop_.lp().A.nnz();
         out_.nodes = 1;
         out_.processing_order.push_back(0);
         if (cfg_.rih_iterations > 0 && !integral(out_.root.final.x)) {  // heuristic (UB only): RIH-lite
@@ -395,7 +437,10 @@ private:
     void serial_step() {
         BnCNode node;
         if (!pop(node)) return;
+        budget_.acquire();
         auto o = process_node(inst_, g_, loop_, pc_, cfg_, std::move(node), out_.ub, cfg_.time_limit_s - elapsed());
+        budget_.release();
+        note_sizes(o);
         apply(o, false);
         progress();
     }
@@ -403,9 +448,9 @@ private:
     // Deterministic parallel batch: up to parallel_lps nodes, each on a snapshot (graph, cut loop,
     // pseudocosts) of the master state; outcomes merged in worker order. Throughput cost: the batch
     // waits for its slowest node, and work found by one worker reaches the others only at merge.
-    void batch() {
+    void batch(uint32_t workers) {
         std::vector<BnCNode> nodes;
-        for (uint32_t w = 0; w < cfg_.parallel_lps; ++w) {
+        for (uint32_t w = 0; w < workers; ++w) {
             BnCNode nd;
             if (!pop(nd)) break;
             nodes.push_back(std::move(nd));
@@ -424,23 +469,24 @@ private:
         std::vector<std::thread> th;
         for (size_t w = 0; w < W; ++w)
             th.emplace_back([&, w] {
+                budget_.acquire();
                 try {
                     res[w] = process_node(inst_, gs[w], *loops[w], pcs[w], cfg_, std::move(nodes[w]), ub, left);
                 } catch (...) {
                     err[w] = std::current_exception();
                 }
+                budget_.release();
             });
         for (auto& t : th) t.join();
         for (auto& e : err)
             if (e) std::rethrow_exception(e);
         for (size_t w = 0; w < W; ++w) {
+            note_sizes(res[w]);
             merge(res[w], gs[w], *loops[w], m0, p0);
             apply(res[w], true);
         }
         loop_.reset_to(last_worker_basis_);  // rows found by the batch carry forward, as in the serial loop
 
-        if (peak_rss_bytes() > cfg_.ram_cap_bytes)
-            throw std::runtime_error("bnc: peak RSS above the parallel-lps memory cap (" + std::to_string(cfg_.ram_cap_bytes) + " bytes)");
         progress();
     }
 
@@ -569,7 +615,7 @@ private:
             std::ostringstream o;
             tag(o, "state");
             put(o, elapsed());
-            put(o, next_id_); put(o, found_integral_); put(o, dive_over_); put(o, rcf_pending_);
+            put(o, next_id_); put(o, found_integral_); put(o, dive_over_); put(o, rcf_pending_); put(o, peak_factor_); put(o, lp_nnz_);
             put(o, out_.ub); put(o, out_.root_lb);
             put(o, out_.root.rcf_fixed0); put(o, out_.root.rcf_fixed1);
             o << '\n';
@@ -679,7 +725,7 @@ private:
             std::istringstream in(files["state.txt"]);
             expect(in, "state");
             elapsed0_ = get<double>(in);
-            next_id_ = get<uint32_t>(in); found_integral_ = get<bool>(in); dive_over_ = get<bool>(in); rcf_pending_ = get<bool>(in);
+            next_id_ = get<uint32_t>(in); found_integral_ = get<bool>(in); dive_over_ = get<bool>(in); rcf_pending_ = get<bool>(in); peak_factor_ = get<uint64_t>(in); lp_nnz_ = get<uint64_t>(in);
             out_.ub = get<int64_t>(in); out_.root_lb = get<double>(in);
             out_.root.rcf_fixed0 = get<uint32_t>(in); out_.root.rcf_fixed1 = get<uint32_t>(in);
             for (uint64_t* v : {&out_.nodes, &out_.pruned, &out_.infeasible, &out_.integral, &out_.branched, &out_.max_depth,
@@ -732,6 +778,8 @@ private:
     std::vector<BnCNode> open_;
     uint32_t next_id_ = 1;
     bool found_integral_ = false, dive_over_ = false, rcf_pending_ = false;
+    LpBudget budget_;
+    uint64_t peak_factor_ = 0, lp_nnz_ = 0;
     Clock::time_point t0_, last_ckpt_;
     double elapsed0_ = 0;
     uint64_t last_progress_ = 0;
