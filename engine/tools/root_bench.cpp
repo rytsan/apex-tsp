@@ -1,7 +1,7 @@
 // Root cut-and-resolve transcript (Sprint 2 gates G2.1-G2.3, G2.5).
 // usage: root_bench --instance <file.tsp> --ref <best known> [--sep-blossom heuristic|full]
 //                   [--no-blossom] [--time-limit s] [--pricing devex|dse] [--seed n]
-//                   [--tree [--best-bound] [--parallel-lps k] [--checkpoint dir [--resume]] [--ils]]
+//                   [--tree [--best-bound] [--parallel-lps k] [--checkpoint dir [--resume]] [--ils]] [--hk]
 #include <cmath>
 #include <cstdio>
 #include <memory>
@@ -13,6 +13,7 @@
 #include "bnc/tree.hpp"
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
+#include "hk/held_karp.hpp"
 #include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
 
@@ -20,7 +21,7 @@ int main(int argc, char** argv) {
     try {
         std::string path;
         double ref = 0, time_limit = INFINITY;
-        bool tree = false, best_bound = false, resume = false, ils = false;
+        bool tree = false, best_bound = false, resume = false, ils = false, hk = false;
         uint32_t parallel_lps = 1;
         std::string checkpoint;
         apex::RootLoopConfig cfg;
@@ -42,6 +43,7 @@ int main(int argc, char** argv) {
             else if (f == "--checkpoint") checkpoint = val();
             else if (f == "--resume") resume = true;
             else if (f == "--ils") ils = true;
+            else if (f == "--hk") hk = true;
             else if (f == "--sep-blossom") {
                 const auto v = val();
                 if (v == "full") cfg.blossom.mode = apex::BlossomMode::Full;
@@ -133,7 +135,15 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(r.priced_edges), g.edges.size());
         std::printf("  rcf: fixed0=%u fixed1=%u   time: lp=%.2fs sep=%.2fs pricing=%.2fs total=%.2fs  rss=%.1fMB\n", r.rcf_fixed0,
                     r.rcf_fixed1, r.lp_s, r.sep_s, r.pricing_s, r.total_s, apex::peak_rss_bytes() / 1048576.0);
-        return r.global_lb <= ref + 1e-6 && r.lp_value <= ref + 1e-6 ? 0 : 1;
+        bool hk_ok = true;
+        if (hk) {  // M4.4 cross-check (c): converged root LP >= subtour LP >= any HK bound
+            const auto h = apex::held_karp(inst, g, cfg.ub, apex::HkConfig{});
+            hk_ok = !(r.converged && h.lb > r.global_lb + 1e-6);
+            std::printf("  held_karp: lb=%.4f (%.4f%% of ref) iterations=%u ascent=%.2fs exact=%.2fs  root_lb >= hk: %s\n", h.lb,
+                        100.0 * h.lb / ref, h.iterations, h.ascent_s, h.exact_s,
+                        !r.converged ? "n/a (root not converged)" : (hk_ok ? "OK" : "BUG"));
+        }
+        return r.global_lb <= ref + 1e-6 && r.lp_value <= ref + 1e-6 && hk_ok ? 0 : 1;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "error: %s\n", e.what());
         return 2;

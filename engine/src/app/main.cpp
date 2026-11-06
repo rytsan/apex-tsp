@@ -1,4 +1,5 @@
 // APEX-TSP engine entry point (Sprint 0: scalable mode = primal engine only).
+#include <optional>
 #include <chrono>
 #include <cstdio>
 #include <exception>
@@ -15,6 +16,7 @@
 #include "geo/hilbert.hpp"
 #include "graph/candidate_graph.hpp"
 #include "decomp/patching.hpp"
+#include "hk/held_karp.hpp"
 #include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
 
@@ -94,6 +96,21 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                           {"neighbors", std::to_string(st.final_neighbors)},
                           {"time_limit_hit", st.time_limit_hit ? "true" : "false"}, {"ms", fmt(since(tl) * 1e3)}});
 
+    // Held-Karp (M4.4): Lagrangian LB of the scalable mode (lb_source lagrangian); ascent gets
+    // 10% of the remaining budget, the exact complete-graph 1-tree comes on top.
+    std::optional<int64_t> lb;
+    if (opt.mode == "scalable" && opt.time_limit_s > 0) {
+        apex::HkConfig hc;
+        hc.time_limit_s = 0.1 * (opt.time_limit_s - prior_wall - since(t0));
+        if (hc.time_limit_s > 0) {
+            const auto hk = apex::held_karp(inst, g, tour.cost, hc);
+            lb = std::min<int64_t>(hk.lb_int, tour.cost);
+            tel.event("held_karp", {{"lb_source", "lagrangian"}, {"lb", fmt(hk.lb, 4)}, {"lb_int", std::to_string(hk.lb_int)},
+                                    {"iterations", std::to_string(hk.iterations)},
+                                    {"ascent_ms", fmt(hk.ascent_s * 1e3)}, {"exact_ms", fmt(hk.exact_s * 1e3)}});
+        }
+    }
+
     // ILS (M4.1, heuristic) fills the rest of the time budget; without --time-limit the run stops
     // after 2-opt as before.
     if (opt.time_limit_s > 0) {
@@ -137,9 +154,14 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     rep.seed = opt.seed;
     rep.threads = 1;
     rep.ram_peak_bytes = apex::peak_rss_bytes();
+    if (lb) {
+        rep.lb = *lb;
+        rep.lb_source = "lagrangian";
+    }
     if (!opt.report.empty()) apex::write_report_file(opt.report, rep);
-    tel.event("done", {{"mode", opt.mode}, {"ub", std::to_string(tour.cost)}, {"lb", "null"}, {"gap_pct", "null"},
-                       {"lb_source", "null"}, {"wall_s", fmt(wall)},
+    tel.event("done", {{"mode", opt.mode}, {"ub", std::to_string(tour.cost)}, {"lb", lb ? std::to_string(*lb) : "null"},
+                       {"gap_pct", lb ? fmt(100.0 * (tour.cost - *lb) / tour.cost, 4) : "null"},
+                       {"lb_source", lb ? "lagrangian" : "null"}, {"wall_s", fmt(wall)},
                        {"ram_peak_bytes", std::to_string(rep.ram_peak_bytes)}});
     return 0;
 }
