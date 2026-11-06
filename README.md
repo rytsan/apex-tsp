@@ -188,6 +188,7 @@ Approved deviations from the original kit (README §4: refinements are recorded 
 | 2026-11-05 | Verification pricing (MASTER §5.6) runs at every node, not only at apparent optimality: every node bound is a Farley bound from exact complete-graph pricing (grid with an exact radius, AVX2 filter), so no node is ever pruned on a restricted-graph bound. `OPTIMAL_PROVEN` certificate = LB_int == UB, recomputed tour cost == UB, plus the count of verification pricing passes | 04 M3.5 |
 | 2026-11-05 | Parallel tree with `std::thread` instead of TBB (operator-approved, no new dependency). Nodes run in deterministic batches of `--parallel-lps` (<= 2) workers on snapshots of the shared state, merged in worker order, so every parallel run is reproducible (`--deterministic` is the only mode); cost: each batch waits for its slowest node | 04 M3.6 |
 | 2026-11-05 | `T_checkpoint_resume_equivalence` kills mid-tree on a280 and eil51: berlin52 (spec) is solved at the root, so it has no tree to interrupt | 04 M3.6, G3.5 |
+| 2026-11-05 | G3.1 miss accepted (operator option 1): eil51 / berlin52 / a280 proven; pr1002 (gap 0.0117% at 1800 s) and fl3795 (gap 2.3905% at 3600 s) not proven. Their proofs move to Sprint 4 (performance) with the §13 numbers as the baseline. Gates unchanged | 04 G3.1, Sprint 4 |
 | 2026-11-04 | Root loop tailing-off stop (gain < 1e-4 relative over 50 rounds), reported separately from convergence | M2.6 |
 | 2026-11-04 | Iterated SEC shrinking: contract a supernode pair only if both have x(delta) = 2 (merging across c > 1 hides violated SECs; found by `T_shrinking_safe`) | MASTER §6, M2.2 |
 | 2026-11-04 | Blossom inequality corrected to the TSP 2-matching form `x(delta(H)\T) - x(T) >= 1 - |T|` (handle + odd teeth); the original `x(E(S)) <= (|S|-1)/2` is invalid for the TSP. Heuristic separation default, Padberg-Rao behind `--sep-blossom=full` | MASTER §6, M2.4 |
@@ -261,7 +262,7 @@ Transcripts: [`docs/SPRINT3_BNC.md`](docs/SPRINT3_BNC.md). Commit `e9f7235`, CI 
 
 | Gate | Result |
 |---|---|
-| G3.1 optimality proven in limits | **MISS**: eil51 / berlin52 / a280 proven; pr1002 and fl3795 not proven |
+| G3.1 optimality proven in limits | **MISS, accepted (§9)**: eil51 / berlin52 / a280 proven; pr1002 and fl3795 not proven, carried to Sprint 4 |
 | G3.2 certificate integrity | OK on all 5 runs (UB == recomputed tour cost, LB <= optimum; LB_int == UB on proven runs) |
 | G3.3 `T_rcf_never_prunes_optimal_edge` | green, 20 instances, 450 fixings at UB = opt |
 | G3.4 `T_verification_pricing_planted_edge` | green, 6 removed / 6 priced back |
