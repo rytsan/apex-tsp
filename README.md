@@ -277,3 +277,27 @@ Transcripts: [`docs/SPRINT3_BNC.md`](docs/SPRINT3_BNC.md). Commit `e9f7235`, CI 
 | G3.5 checkpoint equivalence | green (eil51 / a280, see §9 row) plus parallel resume |
 | G3.6 pr1002 throughput | 2.70 nodes/s, LP 61.3% of time (2 parallel LPs) |
 | G3.7 ASan + UBSan, determinism | clean; a280 logs bitwise identical over 2 runs, serial and parallel |
+
+## 14. Sprint 4 results (hardware: AMD Ryzen 5 3600X, 5 physical cores visible under WSL2, 25 GB RAM, GCC 13.3, preset `benchmark`)
+
+Transcripts: [`docs/SPRINT4_RESULTS.md`](docs/SPRINT4_RESULTS.md). Commit `5363ff5`, seed 1. Gap vs optimum = (UB - opt) / opt; certified gap = (UB - LB) / UB.
+
+| Instance | Mode | Threads | Time | UB | vs optimum | LB (source) | Certified gap | Peak RAM |
+|---|---|---|---|---|---|---|---|---|
+| mona-lisa100K | scalable | 1 | 2700 s | 5765918 | 0.152% | 5751055 (HK) | 0.258% | 56 MB |
+| mona-lisa100K | scalable | 5 | 600 s | 5764699 | 0.130% | 5658315 (HK) | 1.845% | 89 MB |
+| pla85900 | scalable | 5 | 600 s | 143332990 | 0.668% | 141588258 (HK) | 1.217% | 81 MB |
+| eil51 / berlin52 / a280 | exact | 1 | 0.19 / 0.09 / 0.72 s | 426 / 7542 / 2579 | 0 | = UB (LP) | 0, OPTIMAL_PROVEN | 5-6 MB |
+| pr1002 | exact | 5 | 1800 s | 259062 | 0.007% | 259021.4 (LP) | 0.0157%, not proven | 480 MB |
+| fl3795 | exact | 4 | 3600 s | 28935 | 0.567% | 28581.6 (LP) | 1.22%, not proven | 2207 MB |
+
+| Gate | Result |
+|---|---|
+| G4.1 Band D mona-lisa100K <= 3% in <= 45 min, 1 thread | 0.152% in 45 min (stretch 2% met); tour sha256 cfaf3c5f2e5eea5689eeda120e7f31a4f382faf1f59071b6f3886338cdac3e8a |
+| G4.2 pla85900 <= 2% in <= 8 h, RAM <= ceiling | 0.668% vs optimum, 1.217% certified, 10 min; 81 MB of 4096 MB |
+| G4.3 mona-lisa100K <= 2% vs 5757191 in <= 8 h | 0.130% in 10 min; LB: HK 5658315, root LP not run at n = 100000 |
+| G4.4 decomposition honesty audit | clean (no bound identifier in decomposition / primal code, no decomp / hk include in pruning code) |
+| G4.5 FT vs PFI A/B | table pasted; FT default (loses 15% on stress, wins 26% on fl3795) |
+| G4.6 memory enforcement | `T_mem_limit_graceful`, `T_lp_concurrency_budget` green |
+| G4.7 Band A regression | **MISS**: eil51 / berlin52 / a280 proven; pr1002 (0.0157%) and fl3795 (1.22%) not proven in the Sprint 3 limits (same as the accepted G3.1 miss) |
+| G4.8 TSan + ASan + UBSan | clean: 111 test cases / 604692 assertions under ASan+UBSan, 7 parallel tests under TSan |
