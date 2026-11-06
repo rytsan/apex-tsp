@@ -49,6 +49,11 @@ int main(int argc, char** argv) {
                 if (v == "full") cfg.blossom.mode = apex::BlossomMode::Full;
                 else if (v == "heuristic") cfg.blossom.mode = apex::BlossomMode::Heuristic;
                 else throw std::runtime_error("--sep-blossom must be heuristic or full");
+            } else if (f == "--basis-update") {
+                const auto v = val();
+                cfg.lp.basis_update = v == "pfi" ? apex::BasisUpdateKind::Pfi : apex::BasisUpdateKind::ForrestTomlin;
+            } else if (f == "--hypersparse") {
+                cfg.lp.hypersparse = true;
             } else if (f == "--pricing") {
                 const auto v = val();
                 cfg.lp.pricing = v == "dse" ? apex::SimplexOptions::Pricing::DualSteepestEdge : apex::SimplexOptions::Pricing::Devex;
@@ -133,6 +138,11 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(r.pool.aged_out), static_cast<unsigned long long>(r.pool.duplicates));
         std::printf("  pricing: rounds=%u priced_edges=%llu final_edges=%zu\n", r.pricing_rounds,
                     static_cast<unsigned long long>(r.priced_edges), g.edges.size());
+        uint64_t lp_iters = 0;
+        for (const auto& rd : r.rounds) lp_iters += rd.lp_iterations;
+        std::printf("  lp: basis_update=%s hypersparse=%d iterations=%llu refactorizations=%llu peak_lu_nnz=%llu\n",
+                    cfg.lp.basis_update == apex::BasisUpdateKind::Pfi ? "pfi" : "ft", cfg.lp.hypersparse ? 1 : 0,
+                    static_cast<unsigned long long>(lp_iters), static_cast<unsigned long long>(r.refactorizations), static_cast<unsigned long long>(r.peak_factor_nnz));
         std::printf("  rcf: fixed0=%u fixed1=%u   time: lp=%.2fs sep=%.2fs pricing=%.2fs total=%.2fs  rss=%.1fMB\n", r.rcf_fixed0,
                     r.rcf_fixed1, r.lp_s, r.sep_s, r.pricing_s, r.total_s, apex::peak_rss_bytes() / 1048576.0);
         bool hk_ok = true;

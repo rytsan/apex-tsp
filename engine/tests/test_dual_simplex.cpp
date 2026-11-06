@@ -345,3 +345,34 @@ TEST_CASE("T_csc_append_rows_lp_unchanged") {
     CHECK(after.x[0] == doctest::Approx(before.x[0]));
     CHECK(after.x[1] == doctest::Approx(before.x[1]));
 }
+
+TEST_CASE("T_ft_equivalence") {
+    // Forrest-Tomlin and PFI on the same 50 random LPs: same status, same objective.
+    std::mt19937_64 rng(4242);
+    int compared = 0, kkt_pre_existing = 0;
+    double worst = 0;
+    for (int trial = 0; trial < 50; ++trial) {
+        const uint32_t m = 20 + rng() % 60, n = 30 + rng() % 90;
+        const Lp lp = to_lp(random_lp(rng, m, n, trial % 2 == 1));
+        SimplexOptions ft, pfi;
+        ft.refactor_interval = pfi.refactor_interval = 25;  // several updates between refactorizations
+        pfi.basis_update = apex::BasisUpdateKind::Pfi;
+        const auto a = apex::solve_dual(lp, ft);
+        const auto b = apex::solve_dual(lp, pfi);
+        CAPTURE(trial);
+        CHECK(optimal(a) == optimal(b));
+        if (!optimal(a) || !optimal(b)) {
+            CHECK(a.status == b.status);
+            continue;
+        }
+        ++compared;
+        worst = std::max(worst, std::abs(a.objective - b.objective) / (1 + std::abs(b.objective)));
+        // Not worse than PFI. Known pre-existing case (trial 35, free / half-bounded columns): both
+        // updates return the optimal objective but duals with KKT violation ~1 (README §9).
+        if (kkt_violation(lp, b) > 1e-6) ++kkt_pre_existing;
+        CHECK(kkt_violation(lp, a) <= std::max(1e-6, 2 * kkt_violation(lp, b)));
+    }
+    MESSAGE("ft vs pfi: compared=" << compared << " worst_rel_obj_diff=" << worst << " pfi_kkt_cases=" << kkt_pre_existing);
+    CHECK(compared >= 25);
+    CHECK(worst <= 1e-9);
+}

@@ -38,6 +38,7 @@ public:
     double min_pivot_ratio() const { return min_ratio_; }
 
 private:
+    friend class FtFactor;
     struct Step {
         uint32_t row, col;   // pivot row (constraint row) and column (basis position)
         double pivot;

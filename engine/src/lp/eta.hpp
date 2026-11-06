@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "lp/ft_update.hpp"
 #include "lp/lu.hpp"
 
 namespace apex {
@@ -49,29 +50,55 @@ private:
     uint32_t iters_ = 0;
 };
 
-// LU + eta file + scheduler: the basis inverse used by the simplex.
+enum class BasisUpdateKind : uint8_t { ForrestTomlin, Pfi };
+
+// LU + basis update + scheduler: the basis inverse used by the simplex. Forrest-Tomlin (default,
+// M4.6) or the product-form eta file (`--basis-update=pfi`); hypersparse FTRAN/BTRAN with FT.
 class BasisFactor {
 public:
-    explicit BasisFactor(uint32_t refactor_interval = 100) : sched_(refactor_interval) {}
+    explicit BasisFactor(uint32_t refactor_interval = 100, BasisUpdateKind kind = BasisUpdateKind::ForrestTomlin,
+                         bool hypersparse = false)
+        : sched_(refactor_interval), ft_mode_(kind == BasisUpdateKind::ForrestTomlin), hyper_(hypersparse) {}
 
     bool factorize(uint32_t m, const std::vector<SparseCol>& cols, double threshold = 0.01) {
         eta_.reset();
         const bool ok = lu_.factorize(m, cols, threshold);
+        if (ok && ft_mode_) ft_.init(lu_);
+        unstable_ = false;
         sched_.on_refactor(lu_.nnz_factors());
         return ok;
     }
-    void ftran(std::vector<double>& a) const { lu_.ftran(a); eta_.apply_ftran(a); }
-    void btran(std::vector<double>& d) const { eta_.apply_btran(d); lu_.btran(d); }
-    void update(uint32_t r, const std::vector<double>& aq) { eta_.push(r, aq); sched_.on_update(); }
-    bool needs_refactor() const { return sched_.should_refactor(eta_.nnz()); }
+    // Hypersparse paths only when the right-hand side is sparse (< 5% nonzeros).
+    // entering: a is the entering column (Forrest-Tomlin keeps its spike for update()).
+    void ftran(std::vector<double>& a, bool entering = false) const {
+        if (ft_mode_) ft_.ftran(a, hyper_ && sparse(a), entering); else { lu_.ftran(a); eta_.apply_ftran(a); }
+    }
+    void btran(std::vector<double>& d) const {
+        if (ft_mode_) ft_.btran(d, hyper_ && sparse(d)); else { eta_.apply_btran(d); lu_.btran(d); }
+    }
+    void update(uint32_t r, const std::vector<double>& aq) {
+        if (ft_mode_) { if (!ft_.update(r, aq)) unstable_ = true; } else eta_.push(r, aq);
+        sched_.on_update();
+    }
+    bool needs_refactor() const { return unstable_ || sched_.should_refactor(ft_mode_ ? ft_.growth_nnz() : eta_.nnz()); }
+    size_t updates() const { return ft_mode_ ? ft_.updates() : eta_.size(); }
+    size_t peak_nnz() const { return ft_mode_ ? ft_.nnz() : lu_.nnz_factors() + eta_.nnz(); }
+    uint64_t touched() const { return ft_.touched; }
 
     const LuFactorization& lu() const { return lu_; }
     const EtaFile& eta() const { return eta_; }
 
 private:
+    static bool sparse(const std::vector<double>& v) {
+        size_t nz = 0;
+        for (double x : v) nz += x != 0.0;
+        return nz * 20 < v.size();
+    }
     LuFactorization lu_;
     EtaFile eta_;
+    FtFactor ft_;
     RefactorScheduler sched_;
+    bool ft_mode_, hyper_, unstable_ = false;
 };
 
 }  // namespace apex

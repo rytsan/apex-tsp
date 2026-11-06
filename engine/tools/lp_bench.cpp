@@ -105,6 +105,8 @@ struct Args {
     uint64_t seed = 1;
     apex::SimplexOptions::Pricing pricing = apex::SimplexOptions::Pricing::Devex;
     double time_limit = 3600;
+    apex::BasisUpdateKind update = apex::BasisUpdateKind::ForrestTomlin;
+    bool hypersparse = false;
 };
 
 Args parse(int argc, char** argv) {
@@ -121,6 +123,12 @@ Args parse(int argc, char** argv) {
         else if (f == "--seed") a.seed = std::stoull(val());
         else if (f == "--write-mps") a.write_mps_path = val();
         else if (f == "--time-limit") a.time_limit = std::stod(val());
+        else if (f == "--basis-update") {
+            const auto v = val();
+            if (v == "ft") a.update = apex::BasisUpdateKind::ForrestTomlin;
+            else if (v == "pfi") a.update = apex::BasisUpdateKind::Pfi;
+            else throw std::runtime_error("--basis-update must be ft or pfi");
+        } else if (f == "--hypersparse") a.hypersparse = true;
         else if (f == "--pricing") {
             const auto p = val();
             if (p == "devex") a.pricing = apex::SimplexOptions::Pricing::Devex;
@@ -133,11 +141,11 @@ Args parse(int argc, char** argv) {
 
 void row(const char* name, uint32_t m, uint32_t n, const apex::SimplexResult& r, double obj, const char* ref_s,
          const char* rel_s) {
-    std::printf("%-14s %6u %6u  %-15s %22.10e %22s %10s %8llu %6llu %8llu %9.3f %10.0f %8.1f\n", name, m, n,
+    std::printf("%-14s %6u %6u  %-15s %22.10e %22s %10s %8llu %6llu %8llu %9.3f %10.0f %8.1f %10llu\n", name, m, n,
                 apex::status_name(r.status), obj, ref_s, rel_s, static_cast<unsigned long long>(r.iterations),
                 static_cast<unsigned long long>(r.refactorizations), static_cast<unsigned long long>(r.bound_flips),
                 r.solve_time_s, r.solve_time_s > 0 ? r.iterations / r.solve_time_s : 0.0,
-                apex::peak_rss_bytes() / 1048576.0);
+                apex::peak_rss_bytes() / 1048576.0, static_cast<unsigned long long>(r.peak_factor_nnz));
 }
 
 }  // namespace
@@ -148,10 +156,13 @@ int main(int argc, char** argv) {
         apex::SimplexOptions opt;
         opt.pricing = a.pricing;
         opt.time_limit_s = a.time_limit;
-        std::printf("pricing=%s seed=%llu\n", a.pricing == apex::SimplexOptions::Pricing::Devex ? "devex" : "dse",
-                    static_cast<unsigned long long>(a.seed));
-        std::printf("%-14s %6s %6s  %-15s %22s %22s %10s %8s %6s %8s %9s %10s %8s\n", "lp", "rows", "cols", "status",
-                    "objective", "reference", "rel_err", "iters", "refact", "flips", "time_s", "iters/s", "rss_MB");
+        opt.basis_update = a.update;
+        opt.hypersparse = a.hypersparse;
+        std::printf("pricing=%s seed=%llu basis_update=%s hypersparse=%d\n",
+                    a.pricing == apex::SimplexOptions::Pricing::Devex ? "devex" : "dse", static_cast<unsigned long long>(a.seed),
+                    a.update == apex::BasisUpdateKind::Pfi ? "pfi" : "ft", a.hypersparse ? 1 : 0);
+        std::printf("%-14s %6s %6s  %-15s %22s %22s %10s %8s %6s %8s %9s %10s %8s %10s\n", "lp", "rows", "cols", "status",
+                    "objective", "reference", "rel_err", "iters", "refact", "flips", "time_s", "iters/s", "rss_MB", "peak_lu_nnz");
         int failures = 0;
         double total_time = 0;
         uint64_t total_iters = 0;

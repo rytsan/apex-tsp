@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "lp/csc.hpp"
+#include "lp/eta.hpp"
 
 namespace apex {
 
@@ -41,6 +42,9 @@ struct SimplexOptions {
     // when a nonbasic variable needs an infinite bound to be dual feasible. Never
     // triggered by TSP LPs (c >= 0, 0 <= x <= 1).
     double artificial_bound = 1e6;
+    // M4.6: basis update (Forrest-Tomlin default, PFI fallback) and hypersparse FTRAN/BTRAN.
+    BasisUpdateKind basis_update = BasisUpdateKind::ForrestTomlin;
+    bool hypersparse = false;  // measured slower on stress + fl3795 (README §9); --hypersparse
 };
 
 struct SimplexResult {

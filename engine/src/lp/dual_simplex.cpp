@@ -34,7 +34,7 @@ class Simplex {
 public:
     Simplex(const Lp& lp, const SimplexOptions& opt)
         : A_(lp.A), opt_(opt), n_(A_.num_cols()), m_(A_.num_rows()), N_(n_ + m_),
-          fac_(opt.refactor_interval), rng_(opt.seed), t0_(Clock::now()) {
+          fac_(opt.refactor_interval, opt.basis_update, opt.hypersparse), rng_(opt.seed), t0_(Clock::now()) {
         if (lp.c.size() != n_ || lp.lower.size() != n_ || lp.upper.size() != n_)
             throw std::invalid_argument("solve: c/lower/upper size must equal number of columns");
         c0_.assign(N_, 0.0);
@@ -155,9 +155,9 @@ public:
             const uint32_t qj = static_cast<uint32_t>(q);
             std::vector<double> aq(m_, 0.0);
             for_col(qj, [&](uint32_t i, double v) { aq[i] += v; });
-            fac_.ftran(aq);
+            fac_.ftran(aq, true);
             const double alpha_rq = aq[r];
-            if (std::abs(alpha_rq - alpha_[qj]) > 1e-6 * std::max(1.0, std::abs(alpha_rq)) && fac_.eta().size() > 0) {
+            if (std::abs(alpha_rq - alpha_[qj]) > 1e-6 * std::max(1.0, std::abs(alpha_rq)) && fac_.updates() > 0) {
                 clear_alpha();
                 force_refactor_ = true;  // row/column disagree: refactorize and retry
                 continue;
@@ -271,7 +271,7 @@ public:
             const double dir = dq < 0 ? 1.0 : -1.0;
             std::vector<double> aq(m_, 0.0);
             for_col(qj, [&](uint32_t i, double v) { aq[i] += v; });
-            fac_.ftran(aq);
+            fac_.ftran(aq, true);
 
             double theta = ub_[qj] - lb_[qj];  // bound flip distance (inf if unbounded / free)
             if (st_[qj] == VarState::Free) theta = kInf;

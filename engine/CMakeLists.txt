@@ -45,6 +45,7 @@ add_library(apex_core STATIC
     src/lp/csc.cpp
     src/lp/lu.cpp
     src/lp/eta.cpp
+    src/lp/ft_update.cpp
     src/lp/dual_simplex.cpp
     src/lp/mps.cpp
     src/cuts/support.cpp
