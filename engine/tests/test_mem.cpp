@@ -124,3 +124,25 @@ TEST_CASE("T_lp_concurrency_budget") {
         fs::remove_all(dir);
     }
 }
+
+TEST_CASE("T_exact_mode_app") {
+    // apex_tsp --mode exact: heuristic UB, then branch-and-cut proves a280.
+    const fs::path dir = fs::temp_directory_path() / "apex_exact_app_test";
+    fs::remove_all(dir);
+    fs::create_directories(dir);
+    const std::string rep = (dir / "r.json").string(), tour = (dir / "a.tour").string();
+    const int rc = run("--instance " + std::string(APEX_DATA_DIR) + "/a280.tsp --mode exact --threads 2 --out " + tour +
+                           " --report " + rep,
+                       dir / "a.log");
+    const auto log = slurp(dir / "a.log");
+    CAPTURE(log);
+    CHECK(rc == 0);
+    CHECK(log.find("event=bnc_start") != std::string::npos);
+    const auto j = slurp(rep);
+    CHECK(j.find("\"ub\":2579") != std::string::npos);
+    CHECK(j.find("\"lb\":2579") != std::string::npos);
+    CHECK(j.find("\"lb_source\":\"lp\"") != std::string::npos);
+    CHECK(j.find("\"status\":\"OPTIMAL_PROVEN\"") != std::string::npos);
+    CHECK(fs::exists(tour));
+    fs::remove_all(dir);
+}

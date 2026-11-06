@@ -39,6 +39,7 @@ add_library(apex_core STATIC
     src/decomp/kdtree.cpp
     src/decomp/leaf_solver.cpp
     src/decomp/patching.cpp
+    src/decomp/pipeline.cpp
     src/hk/held_karp.cpp
     src/app/mem.cpp
     src/bnc/checkpoint.cpp

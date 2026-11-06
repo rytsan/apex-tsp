@@ -27,7 +27,7 @@ struct LeafStats {
 Instance sub_instance(const Instance& inst, const std::vector<uint32_t>& ids);
 
 // heuristic: one Hamiltonian cycle (global ids) per leaf of `tree`, indexed like `tree` (empty
-// for internal nodes). Leaf solve: Hilbert start + 2-opt + ILS (seed derived from the leaf
+// for internal nodes). Leaf solve: greedy-edge start + 2-opt + ILS (seed derived from the leaf
 // index); leaves with <= exact_limit points then run a mini B&C from that tour and keep its UB.
 std::vector<std::vector<uint32_t>> solve_leaves(const Instance& inst, const std::vector<KdNode>& tree,
                                                 const LeafConfig& cfg, LeafStats* stats = nullptr);

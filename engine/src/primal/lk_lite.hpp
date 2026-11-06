@@ -22,6 +22,10 @@ struct IlsConfig {
     uint32_t max_segment = 50;          // double-bridge segment length cap
     uint32_t strong_kick_after = 1000;  // stalled iterations before a strong kick (3 double bridges)
     uint32_t publish_every = 64;        // on_best called at most once per this many iterations
+    // M4.7: kicks start next to a random node of `focus` (empty: anywhere), e.g. the stitch and
+    // boundary nodes after a cluster merge; fixed edge (fixed_u, fixed_v) is never removed.
+    std::vector<uint32_t> focus;
+    uint32_t fixed_u = UINT32_MAX, fixed_v = UINT32_MAX;
 };
 
 struct IlsStats {

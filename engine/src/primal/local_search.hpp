@@ -25,6 +25,7 @@ public:
 
     uint32_t succ(uint32_t a) const { return t_.order[pos_[a] + 1 == n_ ? 0 : pos_[a] + 1]; }
     uint32_t pred(uint32_t a) const { return t_.order[pos_[a] == 0 ? n_ - 1 : pos_[a] - 1]; }
+    uint32_t position(uint32_t a) const { return pos_[a]; }
     int64_t d(uint32_t a, uint32_t b) const { return dist(in_, a, b); }
 
     void push(uint32_t a) {
@@ -34,6 +35,9 @@ public:
     // 0: 2-opt moves (Sprint 0 behaviour); >= 1: LK-lite chains of up to `depth` 2-opt steps.
     void set_lk_depth(uint32_t depth) { lk_depth_ = depth; }
     uint64_t lk_moves() const { return lk_moves_; }
+    // One tour edge no move may remove (segment polish: the closing edge of a path with fixed
+    // endpoints). Reversals keep it; 2-opt / LK / Or-opt / double bridge never drop it.
+    void set_fixed_edge(uint32_t a, uint32_t b) { fu_ = a; fv_ = b; }
 
     // Undo log: while on, array writes are recorded and rollback() restores the tour exactly.
     // The log holds at most n writes; past that it overflows and rollback copies the mirror (the
@@ -70,15 +74,18 @@ public:
 
     // Segment-local double bridge: a [B: l1 nodes][C: l2 nodes] e  ->  a C B e, B starting at
     // tour position p + 1. Needs l1 + l2 + 2 <= n. Queues the six endpoints.
-    void double_bridge(uint32_t p, uint32_t l1, uint32_t l2) {
+    // Returns false (tour unchanged) if the kick would remove the fixed edge.
+    bool double_bridge(uint32_t p, uint32_t l1, uint32_t l2) {
         auto at = [&](uint32_t k) { return t_.order[(p + k) % n_]; };
         const uint32_t a = at(0), b1 = at(1), bl = at(l1), c1 = at(l1 + 1), cl = at(l1 + l2), e = at(l1 + l2 + 1);
+        if (fixed(a, b1) || fixed(bl, c1) || fixed(cl, e)) return false;
         t_.cost += d(a, c1) + d(cl, b1) + d(bl, e) - d(a, b1) - d(bl, c1) - d(cl, e);
         seg_.clear();
         for (uint32_t k = 0; k < l2; ++k) seg_.push_back(at(l1 + 1 + k));
         for (uint32_t k = 0; k < l1; ++k) seg_.push_back(at(1 + k));
         for (uint32_t k = 0; k < l1 + l2; ++k) put(p + 1 + k, seg_[k]);
         push(a); push(b1); push(bl); push(c1); push(cl); push(e);
+        return true;
     }
 
     // Returns number of improving moves; stops early when the deadline passes.
@@ -107,6 +114,8 @@ private:
     struct Write {
         uint32_t i, old_val, v, old_pos;
     };
+
+    bool fixed(uint32_t a, uint32_t b) const { return (a == fu_ && b == fv_) || (a == fv_ && b == fu_); }
 
     void put(uint32_t at, uint32_t v) {
         at %= n_;
@@ -150,6 +159,7 @@ private:
     bool try_2opt(uint32_t t1) {
         for (int dir = 0; dir < 2; ++dir) {
             const uint32_t t2 = dir == 0 ? succ(t1) : pred(t1);
+            if (fixed(t1, t2)) continue;
             const int64_t d12 = d(t1, t2);
             for (uint32_t p = g_.adj_start[t2]; p < nb_end(t2); ++p) {
                 const uint32_t e = g_.adj[p];
@@ -158,7 +168,7 @@ private:
                 if (d12 - d23 <= 0) break;  // sorted neighbours: no further positive partial gain
                 if (t3 == t1) continue;
                 const uint32_t t4 = dir == 0 ? pred(t3) : succ(t3);
-                if (t4 == t2) continue;
+                if (t4 == t2 || fixed(t3, t4)) continue;
                 const int64_t gain = d12 + d(t3, t4) - d23 - d(t1, t4);
                 if (gain > 0) {
                     // dir 0: t1 t2 .. t4 t3 -> reverse t2..t4 ; dir 1: t3 t4 .. t2 t1 -> reverse t4..t2
@@ -180,6 +190,7 @@ private:
     bool try_lk(uint32_t t1) {
         for (int side = 0; side < 2; ++side) {
             const uint32_t t2 = side == 0 ? succ(t1) : pred(t1);
+            if (fixed(t1, t2)) continue;
             chain_.clear();
             if (lk_step(t1, t2, d(t1, t2), 0)) {
                 push(t1);
@@ -208,6 +219,7 @@ private:
             if (g - d23 <= 0) break;  // sorted neighbours
             if (t3 == t1 || t3 == succ(t2) || t3 == pred(t2)) continue;
             const uint32_t t4 = fwd ? pred(t3) : succ(t3);
+            if (fixed(t3, t4)) continue;
             const int64_t d34 = d(t3, t4);
             const Cand x{d34 - d23, d23, d34, t3, t4};
             uint32_t k = nc < breadth ? nc++ : breadth;  // insertion into the top-`breadth` list
@@ -261,6 +273,7 @@ private:
                 const uint32_t ps = side == 0 ? pos_[t1] : (pos_[t1] + n_ - (len - 1)) % n_;
                 const uint32_t s1 = t_.order[ps], s2 = t_.order[(ps + len - 1) % n_];
                 const uint32_t p = pred(s1), nx = succ(s2);
+                if (fixed(p, s1) || fixed(s2, nx)) continue;
                 const int64_t g1 = d(p, s1) + d(s2, nx) - d(p, nx);
                 if (g1 <= 0) continue;
                 for (uint32_t end = 0; end < 2; ++end) {
@@ -273,7 +286,7 @@ private:
                         for (int side_c = 0; side_c < 2; ++side_c) {
                             const uint32_t a = side_c == 0 ? pred(c) : c;
                             const uint32_t b = side_c == 0 ? c : succ(c);
-                            if (in_seg(a, ps, len) || in_seg(b, ps, len)) continue;
+                            if (in_seg(a, ps, len) || in_seg(b, ps, len) || fixed(a, b)) continue;
                             const int64_t dab = d(a, b);
                             const int64_t fwd = g1 + dab - d(a, s1) - d(s2, b);  // a s1..s2 b
                             const int64_t rev = g1 + dab - d(a, s2) - d(s1, b);  // a s2..s1 b
@@ -298,6 +311,7 @@ private:
     uint32_t n_;
     uint32_t k_ = 10;
     uint32_t lk_depth_ = 0;
+    uint32_t fu_ = UINT32_MAX, fv_ = UINT32_MAX;
     uint64_t lk_moves_ = 0;
     std::vector<uint32_t> pos_;
     std::vector<uint8_t> queued_;

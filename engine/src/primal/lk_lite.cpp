@@ -25,6 +25,7 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
 
     detail::LocalSearch ls(tour, inst, g);
     ls.set_lk_depth(cfg.lk_depth);
+    ls.set_fixed_edge(cfg.fixed_u, cfg.fixed_v);
     TwoOptStats ts;
     const auto no_deadline = Clock::time_point{};
     ls.round(k_max, true, tour.order, no_deadline, false, ts);  // LK-lite descent from every node
@@ -45,9 +46,11 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
         ls.log_begin();
         const bool strong = stall >= cfg.strong_kick_after;
         for (int k = 0; k < (strong ? 3 : 1); ++k) {
-            const uint32_t p = static_cast<uint32_t>(rng() % n);
+            uint32_t p = static_cast<uint32_t>(rng() % n);
             const uint32_t l1 = 1 + static_cast<uint32_t>(rng() % seg);
             const uint32_t l2 = 1 + static_cast<uint32_t>(rng() % seg);
+            if (!cfg.focus.empty())  // kick window covers a focus node
+                p = (ls.position(cfg.focus[p % cfg.focus.size()]) + n - static_cast<uint32_t>(rng() % (l1 + l2 + 1))) % n;
             ls.double_bridge(p, l1, l2);
         }
         if (strong) { ++st.strong_kicks; stall = 0; }

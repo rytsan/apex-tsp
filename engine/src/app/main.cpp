@@ -1,7 +1,10 @@
 // APEX-TSP engine entry point (Sprint 0: scalable mode = primal engine only).
 #include <chrono>
 #include <cstdio>
+#include <algorithm>
 #include <exception>
+#include <filesystem>
+#include <memory>
 #include <new>
 #include <optional>
 #include <random>
@@ -17,7 +20,8 @@
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
 #include "graph/candidate_graph.hpp"
-#include "decomp/patching.hpp"
+#include "bnc/tree.hpp"
+#include "decomp/pipeline.hpp"
 #include "hk/held_karp.hpp"
 #include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
@@ -42,7 +46,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     tel.event("instance_loaded", {{"name", inst.name}, {"n", std::to_string(inst.n)},
                                   {"metric", apex::metric_name(inst.metric)}, {"ms", fmt(since(t0) * 1e3)}});
     tel.event("config", {{"mode", opt.mode}, {"seed", std::to_string(opt.seed)},
-                         {"threads", std::to_string(opt.threads)}, {"threads_used", std::to_string(opt.mode == "scalable" && inst.n > 2 * opt.leaf_size ? opt.threads : 1)},
+                         {"threads", std::to_string(opt.threads)}, {"threads_used", std::to_string(opt.threads)},
                          {"mem_limit_mb", std::to_string(opt.mem_limit_mb)}, {"mem_limit_enforced", enf.enforced ? "true" : "false"},
                          {"mem_limit_method", enf.method},
                          {"time_limit_s", fmt(opt.time_limit_s)}, {"knn", std::to_string(opt.knn)}});
@@ -70,31 +74,32 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     try {
     apex::check_memory(mem_limit, "start");
     const auto tg = Clock::now();
-    const auto g = apex::build_candidate_graph(inst, {opt.knn, true});
+    auto g = apex::build_candidate_graph(inst, {opt.knn, true});
     apex::check_memory(mem_limit, "candidate_graph");
     tel.event("candidate_graph", {{"edges", std::to_string(g.edges.size())},
                                   {"fallback_edges", std::to_string(g.fallback_edges)},
                                   {"ms", fmt(since(tg) * 1e3)}});
 
-    // heuristic: KD-tree decomposition + patching gives the scalable-mode start tour (UB only;
-    // no bound from this phase exists or is used).
-    if (opt.mode == "scalable" && !opt.resume && inst.n > 2 * opt.leaf_size) {
+    // heuristic (M4.7): density clusters solved in parallel, merged level by level with
+    // re-evaluation (or greedy + 2-opt for small n). UB only; no bound from this phase exists.
+    if (!opt.resume) {
         apex::DecompConfig dc;
         dc.max_leaf = opt.leaf_size;
         dc.leaf.exact_limit = opt.leaf_exact_limit;
         dc.leaf.threads = opt.threads;
         dc.leaf.seed = rng();
-        apex::DecompStats ds;
-        auto dt = apex::decompose_and_patch(inst, g, dc, &ds);
-        tel.event("decomposition", {{"phase", "decomposition (heuristic)"}, {"heuristic", "true"},
-                                    {"leaves", std::to_string(ds.leaf.leaves)},
-                                    {"leaf_min", std::to_string(ds.leaf.min_size)}, {"leaf_max", std::to_string(ds.leaf.max_size)},
-                                    {"exact_leaves", std::to_string(ds.leaf.exact_leaves)},
-                                    {"patched", std::to_string(ds.patched_cost)}, {"ub", std::to_string(ds.final_cost)},
-                                    {"leaf_ms", fmt(ds.leaf_s * 1e3)}, {"patch_ms", fmt(ds.patch_s * 1e3)}});
+        apex::ConstructStats cs;
+        auto dt = apex::construct_tour(inst, g, dc, &cs);
+        const auto& ds = cs.decomp;
+        tel.event("construct", {{"phase", cs.decomposed ? "decomposition (heuristic)" : "greedy (heuristic)"}, {"heuristic", "true"},
+                                {"leaves", std::to_string(ds.leaf.leaves)}, {"levels", std::to_string(ds.levels)},
+                                {"leaf_min", std::to_string(ds.leaf.min_size)}, {"leaf_max", std::to_string(ds.leaf.max_size)},
+                                {"exact_leaves", std::to_string(ds.leaf.exact_leaves)}, {"leaf_sum", std::to_string(ds.leaf_sum)},
+                                {"stitch_cost", std::to_string(ds.stitch_cost)}, {"reeval_gain", std::to_string(ds.reeval_gain)},
+                                {"ub", std::to_string(dt.cost)}, {"ms", fmt(cs.seconds * 1e3)}});
         if (dt.cost < tour.cost) tour = std::move(dt);
         best = tour;
-        apex::check_memory(mem_limit, "decomposition");
+        apex::check_memory(mem_limit, "construct");
     }
 
     apex::TwoOptConfig cfg;
@@ -128,19 +133,52 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
         apex::check_memory(mem_limit, "held_karp");
     }
 
-    // ILS (M4.1, heuristic) fills the rest of the time budget; without --time-limit the run stops
-    // after 2-opt as before.
-    if (opt.time_limit_s > 0) {
-        apex::IlsConfig ic;
-        ic.seed = rng();
-        ic.time_limit_s = opt.time_limit_s - prior_wall - since(t0);
-        if (ic.time_limit_s > 0) {
-            const auto is = apex::iterated_local_search(tour, inst, g, ic);
-            tel.event("ils", {{"heuristic", "true"}, {"ub", std::to_string(tour.cost)},
-                              {"start", std::to_string(is.start_cost)}, {"iterations", std::to_string(is.iterations)},
-                              {"improvements", std::to_string(is.improvements)},
-                              {"strong_kicks", std::to_string(is.strong_kicks)}, {"ms", fmt(is.seconds * 1e3)}});
+    // Polish (M4.1 ILS; M4.7 parallel segments with --threads > 1). Scalable: the rest of the
+    // budget. Exact: a warm-up (10% of the budget, or 2 iterations per node without a limit)
+    // whose tour is the UB the branch-and-cut starts from.
+    const bool exact = opt.mode == "exact";
+    const double left = opt.time_limit_s > 0 ? opt.time_limit_s - prior_wall - since(t0) : 0;
+    if (exact || left > 0) {
+        apex::PolishConfig pc;
+        pc.threads = opt.threads;
+        pc.seed = rng();
+        if (left > 0) pc.time_limit_s = exact ? 0.1 * left : left;
+        const auto ps = apex::polish_tour(tour, inst, g, pc);
+        tel.event("polish", {{"heuristic", "true"}, {"ub", std::to_string(tour.cost)}, {"start", std::to_string(ps.start_cost)},
+                             {"parallel", ps.parallel ? "true" : "false"}, {"segments", std::to_string(ps.segments)},
+                             {"rounds", std::to_string(ps.rounds)}, {"iterations", std::to_string(ps.iterations)},
+                             {"ms", fmt(ps.seconds * 1e3)}});
+        best = tour;
+        apex::check_memory(mem_limit, "polish");
+    }
+
+    if (exact) {  // branch-and-cut from the heuristic UB (Sprint 3 + M4.7 hand-off)
+        const uint32_t added = apex::add_tour_edges(g, inst, tour);
+        apex::BnCConfig bc;
+        bc.parallel_lps = std::clamp<uint32_t>(opt.threads, 1, 6);
+        bc.mem_limit_bytes = mem_limit;
+        bc.seed = opt.seed;
+        bc.tour_path = opt.out;
+        if (opt.time_limit_s > 0) bc.time_limit_s = std::max(0.0, opt.time_limit_s - prior_wall - since(t0));
+        if (!opt.checkpoint.empty()) {
+            bc.checkpoint_dir = opt.checkpoint + "/bnc";
+            bc.resume = opt.resume && std::filesystem::exists(bc.checkpoint_dir + "/LATEST");
         }
+        std::unique_ptr<apex::BackgroundIls> bg;
+        if (opt.threads > 1) {
+            apex::IlsConfig ic;
+            ic.seed = rng();
+            bg = std::make_unique<apex::BackgroundIls>(inst, g, tour, ic);
+            bc.primal = bg.get();
+        }
+        tel.event("bnc_start", {{"ub", std::to_string(tour.cost)}, {"tour_edges_added", std::to_string(added)},
+                                {"edges", std::to_string(g.edges.size())}, {"parallel_lps", std::to_string(bc.parallel_lps)},
+                                {"background_ils", bg ? "true" : "false"}});
+        const auto r = apex::run_bnc(inst, g, bc, tour, &tel);
+        if (bg) bg->stop();
+        tour = r.best;
+        lb = r.lb_int;
+        status = r.status == apex::BnCResult::Status::MemLimit ? "MEM_LIMIT" : apex::status_name(r.status);
     }
 
     best = tour;
@@ -180,19 +218,20 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     rep.ub = tour.cost;
     rep.wall_s = wall;
     rep.seed = opt.seed;
-    rep.threads = 1;
     rep.ram_peak_bytes = apex::peak_rss_bytes();
     rep.status = status;
+    rep.threads = opt.threads;
+    const char* lb_source = opt.mode == "exact" ? "lp" : "lagrangian";
     if (lb) {
         rep.lb = *lb;
-        rep.lb_source = "lagrangian";
+        rep.lb_source = lb_source;
     }
     if (!opt.report.empty()) apex::write_report_file(opt.report, rep);
     tel.event("done", {{"status", status}, {"mode", opt.mode}, {"ub", std::to_string(tour.cost)}, {"lb", lb ? std::to_string(*lb) : "null"},
                        {"gap_pct", lb ? fmt(100.0 * (tour.cost - *lb) / tour.cost, 4) : "null"},
-                       {"lb_source", lb ? "lagrangian" : "null"}, {"wall_s", fmt(wall)},
+                       {"lb_source", lb ? lb_source : "null"}, {"wall_s", fmt(wall)},
                        {"ram_peak_bytes", std::to_string(rep.ram_peak_bytes)}});
-    return status == "done" ? 0 : 4;
+    return status == "MEM_LIMIT" ? 4 : 0;
 }
 
 }  // namespace
@@ -206,10 +245,6 @@ int main(int argc, char** argv) {
         tel.event("error", {{"kind", "cli"}, {"msg", e.what()}});
         std::fputs(apex::kUsage, stderr);
         return 2;
-    }
-    if (opt.mode == "exact") {
-        tel.event("error", {{"kind", "not_implemented"}, {"msg", "--mode exact is not implemented until Sprint 3"}});
-        return 3;
     }
     try {
         return run(opt, tel);

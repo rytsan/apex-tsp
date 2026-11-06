@@ -8,6 +8,7 @@
 #include "bnc/tree.hpp"
 #include "geo/hilbert.hpp"
 #include "primal/lk_lite.hpp"
+#include "primal/lp_tour.hpp"
 #include "primal/two_opt.hpp"
 
 namespace apex {
@@ -34,7 +35,7 @@ uint64_t mix(uint64_t x) {  // splitmix64 finalizer
     return x ^ (x >> 31);
 }
 
-// heuristic: tour of one leaf in local ids; *exact / *proven report the mini B&C path.
+// heuristic: tour of one leaf in local ids (greedy + 2-opt + ILS, then mini B&C if small); *exact / *proven report the mini B&C path.
 std::vector<uint32_t> solve_leaf(const Instance& sub, const LeafConfig& cfg, uint64_t seed, bool* exact, bool* proven) {
     if (sub.n <= 3) {
         std::vector<uint32_t> t(sub.n);
@@ -42,10 +43,8 @@ std::vector<uint32_t> solve_leaf(const Instance& sub, const LeafConfig& cfg, uin
         return t;
     }
     auto g = build_candidate_graph(sub);
-    Tour t = hilbert_tour(sub, hilbert_order(sub));
-    TwoOptConfig tc;
-    tc.seed = seed;
-    two_opt_oropt(t, sub, g, tc);
+    // Greedy edge start (candidate graph by cost, fragments joined nearest-first) + 2-opt/Or-opt.
+    Tour t = lp_guided_tour(sub, g, {});
     IlsConfig ic;
     ic.seed = seed;
     ic.max_iterations = cfg.ils_iterations_per_node * sub.n;

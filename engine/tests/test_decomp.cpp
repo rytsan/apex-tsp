@@ -6,6 +6,8 @@
 
 #include "decomp/kdtree.hpp"
 #include "decomp/patching.hpp"
+#include "decomp/pipeline.hpp"
+#include "primal/lk_lite.hpp"
 
 namespace {
 
@@ -59,6 +61,7 @@ TEST_CASE("T_patch_produces_valid_tour") {
         cfg.max_leaf = s <= 2 ? 120 : 400;  // s = 1, 2: leaves <= 300 take the exact mini B&C path
         cfg.leaf.ils_iterations_per_node = 2;
         cfg.leaf.exact_max_nodes = 20;
+        cfg.leaf.exact_limit = s <= 2 ? 300 : 0;
         cfg.leaf.threads = 4;
         apex::DecompStats st;
         const auto t = apex::decompose_and_patch(inst, g, cfg, &st);
@@ -82,7 +85,7 @@ TEST_CASE("T_patch_pla85900") {
     const auto t = apex::decompose_and_patch(inst, g, cfg, &st);
     REQUIRE(apex::is_valid_tour(t, inst.n));
     CHECK(t.cost == apex::tour_cost(inst, t));
-    CHECK(st.leaf.min_size >= 500);
+    CHECK(st.leaf.min_size > 800 * 35 / 100);  // density cuts: (0.35 * leaf, leaf]
     CHECK(st.leaf.max_size <= 800);
     MESSAGE("pla85900 leaves=" << st.leaf.leaves << " leaf_sum=" << st.leaf_sum << " patched=" << st.patched_cost
                                << " final=" << t.cost << " vs 142382641: "
@@ -96,10 +99,94 @@ TEST_CASE("T_leaf_parallel_deterministic_option") {
     apex::DecompConfig cfg;
     cfg.max_leaf = 500;
     cfg.leaf.ils_iterations_per_node = 3;
+    cfg.leaf.exact_limit = 0;
     cfg.leaf.threads = 1;
     const auto a = apex::decompose_and_patch(inst, g, cfg);
     cfg.leaf.threads = 5;
     const auto b = apex::decompose_and_patch(inst, g, cfg);
     CHECK(a.order == b.order);
     CHECK(a.cost == b.cost);
+}
+
+TEST_CASE("T_density_tree_cuts_gaps") {
+    // Clustered instance: density cuts (widest gap within the 35-65% ranks) keep every leaf
+    // within (0.35 * leaf, leaf] and cover all nodes.
+    const auto inst = random_instance(20000, 9, true);
+    const auto tree = apex::build_density_tree(inst, 800);
+    uint32_t lo = UINT32_MAX, hi = 0, total = 0;
+    for (const auto& nd : tree)
+        if (nd.left < 0) {
+            lo = std::min<uint32_t>(lo, static_cast<uint32_t>(nd.points.size()));
+            hi = std::max<uint32_t>(hi, static_cast<uint32_t>(nd.points.size()));
+            total += static_cast<uint32_t>(nd.points.size());
+        }
+    CHECK(total == inst.n);
+    CHECK(hi <= 800);
+    CHECK(lo > 800 * 35 / 100);
+    MESSAGE("density leaves " << lo << ".." << hi << " count=" << (tree.size() + 1) / 2);
+}
+
+TEST_CASE("T_fixed_edge_kept") {
+    const auto inst = random_instance(3000, 4, false);
+    const auto g = apex::build_candidate_graph(inst);
+    apex::Tour t;
+    for (uint32_t k = 0; k < inst.n; ++k) t.order.push_back(k);  // terrible tour: many moves
+    t.cost = apex::tour_cost(inst, t);
+    apex::IlsConfig ic;
+    ic.max_iterations = 2000;
+    ic.fixed_u = 17;
+    ic.fixed_v = 18;  // consecutive in the start tour
+    apex::iterated_local_search(t, inst, g, ic);
+    REQUIRE(apex::is_valid_tour(t, inst.n));
+    uint32_t p = 0;
+    while (t.order[p] != 17) ++p;
+    const uint32_t a = t.order[(p + 1) % inst.n], b = t.order[(p + inst.n - 1) % inst.n];
+    CHECK((a == 18 || b == 18));
+}
+
+TEST_CASE("T_polish_segments") {
+    const auto inst = random_instance(30000, 5, true);
+    const auto g = apex::build_candidate_graph(inst);
+    apex::DecompConfig dc;
+    dc.leaf.ils_iterations_per_node = 1;
+    dc.leaf.exact_limit = 0;
+    dc.leaf.threads = 4;
+    const auto start = apex::construct_tour(inst, g, dc);
+    apex::PolishConfig pc;
+    pc.segment_size = 5000;
+    pc.rounds = 2;
+    pc.iterations_per_node = 1;
+    pc.threads = 2;
+    auto a = start;
+    const auto sa = apex::polish_tour(a, inst, g, pc);
+    pc.threads = 5;
+    auto b = start;
+    const auto sb = apex::polish_tour(b, inst, g, pc);
+    REQUIRE(apex::is_valid_tour(a, inst.n));
+    CHECK(a.cost == apex::tour_cost(inst, a));
+    CHECK(sa.parallel);
+    CHECK(sa.segments == 6);
+    CHECK(sa.rounds == 2);
+    CHECK(a.cost <= start.cost);
+    CHECK(a.order == b.order);  // deterministic for any thread count
+    CHECK(sb.final_cost == sa.final_cost);
+    MESSAGE("polish 30000: construct=" << start.cost << " polished=" << a.cost << " iterations=" << sa.iterations);
+}
+
+TEST_CASE("T_add_tour_edges") {
+    const auto inst = random_instance(2000, 6, false);
+    auto g = apex::build_candidate_graph(inst);
+    apex::Tour t;
+    for (uint32_t k = 0; k < inst.n; ++k) t.order.push_back(k);
+    const size_t before = g.edges.size();
+    const uint32_t added = apex::add_tour_edges(g, inst, t);
+    CHECK(g.edges.size() == before + added);
+    CHECK(added > 0);
+    CHECK(apex::add_tour_edges(g, inst, t) == 0);
+    for (uint32_t k = 0; k < inst.n; ++k) {
+        const uint32_t u = t.order[k], v = t.order[(k + 1) % inst.n];
+        bool found = false;
+        for (uint32_t p = g.adj_start[u]; p < g.adj_start[u + 1]; ++p) found = found || g.other(g.adj[p], u) == v;
+        REQUIRE(found);
+    }
 }

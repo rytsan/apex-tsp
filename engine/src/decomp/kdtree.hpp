@@ -22,4 +22,9 @@ struct KdNode {
 // 800. nodes[0] is the root; children come after their parent. Deterministic (ties by id).
 std::vector<KdNode> build_kdtree(const Instance& inst, uint32_t max_leaf);
 
+// heuristic (M4.7): density-aware split. The cut goes through the widest empty gap along the
+// wider axis among the cut ranks [35%, 65%] of the points (ties: closest to the median), so
+// natural clusters stay whole. Leaves: (0.35 * max_leaf, max_leaf] points.
+std::vector<KdNode> build_density_tree(const Instance& inst, uint32_t max_leaf);
+
 }  // namespace apex
