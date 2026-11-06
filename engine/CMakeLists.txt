@@ -35,6 +35,7 @@ add_library(apex_core STATIC
     src/primal/two_opt.cpp
     src/primal/lp_tour.cpp
     src/primal/lk_lite.cpp
+    src/bnc/primal_heur.cpp
     src/bnc/checkpoint.cpp
     src/lp/csc.cpp
     src/lp/lu.cpp
@@ -85,7 +86,8 @@ add_executable(engine_tests
     tests/test_rcf.cpp
     tests/test_pricing.cpp
     tests/test_bnc_checkpoint.cpp
-    tests/test_lk.cpp)
+    tests/test_lk.cpp
+    tests/test_primal_heur.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}")
 target_link_libraries(engine_tests PRIVATE apex_core)

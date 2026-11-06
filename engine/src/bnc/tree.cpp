@@ -98,6 +98,7 @@ struct NodeOutcome {
     std::vector<Observation> obs;
     bool found_integral = false, warm = false, warm_dual_bad = false;
     double lp_s = 0, sep_s = 0, pricing_s = 0, heuristic_s = 0;
+    uint64_t dive_calls = 0, dive_tours = 0, dive_pivots = 0;
     uint64_t pricing_calls = 0, priced = 0, heuristic_calls = 0, strong_pivots = 0, strong_candidates = 0, rcf_node_fixings = 0;
 };
 
@@ -130,6 +131,18 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
             t.cost = tour_cost(inst, t);
             if (t.cost < ub) ub = t.cost;
             o.offers.push_back({std::move(t), "lp_guided"});
+        }
+    }
+    if (!tour && cfg.dive.max_rounds > 0 && !integral(r.final.x)) {  // heuristic (UB only): LP diving
+        const auto th = Clock::now();
+        auto dv = dive(inst, g, loop.lp_mut(), loop.basis().basis, r.final.x, cfg.root.lp, cfg.dive);
+        o.heuristic_s += secs(th);
+        ++o.dive_calls;
+        o.dive_pivots += dv.pivots;
+        if (!dv.tour.order.empty()) {
+            ++o.dive_tours;
+            if (dv.tour.cost < ub) ub = dv.tour.cost;
+            o.offers.push_back({std::move(dv.tour), "dive"});
         }
     }
     if (prunable(r.global_lb, ub)) { o.kind = tour ? NodeOutcome::Kind::Integral : NodeOutcome::Kind::Pruned; return; }
@@ -328,6 +341,17 @@ private:
         out_.root_lb = out_.root.global_lb;
         out_.nodes = 1;
         out_.processing_order.push_back(0);
+        if (cfg_.rih_iterations > 0 && !integral(out_.root.final.x)) {  // heuristic (UB only): RIH-lite
+            IlsConfig ic;
+            ic.seed = cfg_.seed;
+            ic.max_iterations = cfg_.rih_iterations;
+            const auto th = Clock::now();
+            auto t = rih_lite(inst_, g_, out_.root.final.x, out_.best, ic);
+            out_.heuristic_s += secs(th);
+            const int64_t before = out_.ub;
+            offer(std::move(t), "rih");
+            out_.rih_improved = out_.ub < before;
+        }
         BnCNode node{0, 0, std::isfinite(out_.root_lb) ? out_.root_lb : -INFINITY, {}, nullptr, NodeState::Processing};
         NodeOutcome o;
         conclude(inst_, g_, loop_, pc_, cfg_, out_.root, node, out_.ub, o);
@@ -474,6 +498,9 @@ private:
         out_.verification_pricing_calls += o.pricing_calls;
         out_.priced_columns += o.priced;
         out_.heuristic_calls += o.heuristic_calls;
+        out_.dive_calls += o.dive_calls;
+        out_.dive_tours += o.dive_tours;
+        out_.dive_pivots += o.dive_pivots;
         out_.strong_pivots += o.strong_pivots;
         out_.strong_candidates += o.strong_candidates;
         out_.max_node_strong_pivots = std::max(out_.max_node_strong_pivots, o.strong_pivots);
@@ -509,7 +536,8 @@ private:
         rcf_pending_ = true;
         if (!cfg_.tour_path.empty())
             write_tour_file(cfg_.tour_path, inst_, out_.best, "apex_tsp " + std::string(source) + " ub " + std::to_string(out_.ub));
-        if (tel_) tel_->event("ub_improved", {{"nodes", std::to_string(out_.nodes)}, {"ub", std::to_string(out_.ub)}, {"source", source}});
+        if (tel_) tel_->event("ub_improved", {{"nodes", std::to_string(out_.nodes)}, {"ub", std::to_string(out_.ub)}, {"source", source},
+                                             {"heuristic", std::string(source) == "lp_integral" ? "false" : "true"}});
     }
 
     void poll_primal() {
