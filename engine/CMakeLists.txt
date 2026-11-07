@@ -42,6 +42,7 @@ add_library(apex_core STATIC
     src/decomp/pipeline.cpp
     src/hk/held_karp.cpp
     src/app/mem.cpp
+    src/ipc/protocol.cpp
     src/bnc/checkpoint.cpp
     src/lp/csc.cpp
     src/lp/lu.cpp
@@ -97,7 +98,8 @@ add_executable(engine_tests
     tests/test_primal_heur.cpp
     tests/test_decomp.cpp
     tests/test_held_karp.cpp
-    tests/test_mem.cpp)
+    tests/test_mem.cpp
+    tests/test_ipc_protocol.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}" APEX_BIN="$<TARGET_FILE:engine>")
 add_dependencies(engine_tests engine)
