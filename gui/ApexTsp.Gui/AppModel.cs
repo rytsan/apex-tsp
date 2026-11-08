@@ -251,7 +251,7 @@ public sealed record ReferenceRow(string Instance, long Value, string Kind, stri
     {
         var v = Kind == "optimal" ? $"optimum {Value} (TSPLIB)" : $"best known tour {Value} (not proven optimal)";
         var parts = new List<string> { v };
-        if (Year.Length > 0) parts.Add($"first solved {Year} by {SolvedBy}" + (FirstSolveStated.Length > 0 ? $" in {FirstSolveStated} ({FirstSolveHw})" : ""));
+        if (Year.Length > 0) parts.Add($"first solved {Year}" + (SolvedBy.Length > 0 ? $" by {SolvedBy}" : "") + (FirstSolveStated.Length > 0 ? $" in {FirstSolveStated} ({FirstSolveHw})" : ""));
         if (Abcc98Stated.Length > 0) parts.Add($"Concorde 1998 paper: {Abcc98Stated} (400 MHz AlphaServer)");
         if (Concorde99.Length > 0) parts.Add($"Concorde 1999: {Concorde99} s (500 MHz Alpha)");
         if (Concorde03.Length > 0) parts.Add($"Concorde 2003: {Concorde03} s (2.8 GHz Xeon)");

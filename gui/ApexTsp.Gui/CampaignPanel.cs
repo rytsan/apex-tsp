@@ -468,7 +468,7 @@ public sealed partial class MainWindow
             if (conc is { } cc && p03 is { } q && q > 0) c03.Add(Math.Max(cc, 1e-3) / q);
             var running = _campaignActive && _current is { } cur && cur.Instance == name ? " ◀" : "";
             lines.Add(string.Create(CultureInfo.InvariantCulture,
-                $"{name,-14}{n,6}  {(rr?.Year is { Length: > 0 } y ? y : "-"),6}  {(rr?.FirstSolveStated is { Length: > 0 } fs ? fs : "-"),-13} |  {(rr?.Abcc98Stated is { Length: > 0 } a98 ? a98.Replace(" seconds", "") : "-"),10}  {T(p99),10}  {T(p03),9}   | {Time(co),8}  {Time(ex),10}   | {R(apex, conc),8} {R(apex, p03),6} {R(apex, p99),6} {R(apex, p98),6} {R(apex, pFirst),8}  | {VsRef(sc, refv),9}  {VsRef(lk, refv),9}{running}"));
+                $"{name,-14}{n,6}  {(rr?.Year is { Length: > 0 } y ? y : "-"),6}  {(rr?.FirstSolveStated is { Length: > 0 } fs ? fs.Replace(" seconds", " s").Replace(" years", " y") : "-"),-13} |  {(rr?.Abcc98Stated is { Length: > 0 } a98 ? a98.Replace(" seconds", "") : "-"),10}  {T(p99),10}  {T(p03),9}   | {Time(co),8}  {Time(ex),10}   | {R(apex, conc),8} {R(apex, p03),6} {R(apex, p99),6} {R(apex, p98),6} {R(apex, pFirst),8}  | {VsRef(sc, refv),9}  {VsRef(lk, refv),9}{running}"));
         }
         _campTable.ItemsSource = lines;
         static string G(List<double> v) => v.Count == 0 ? "-" : Math.Exp(v.Average(Math.Log)).ToString("0.##", CultureInfo.InvariantCulture) + "x";
@@ -477,8 +477,9 @@ public sealed partial class MainWindow
             $"Geometric mean — APEX ÷ Concorde on this machine: {G(rHere)} ({rHere.Count} instances) · APEX ÷ Concorde 2003 published: {G(r03)} ({r03.Count}) · " +
             $"APEX ÷ Concorde 1999 published: {G(r99)} ({r99.Count}) · APEX ÷ Concorde 1998 paper: {G(r98)} ({r98.Count}) · APEX ÷ first solution: {G(rFirst)} ({rFirst.Count}) · " +
             $"Concorde here ÷ Concorde 2003 (hardware + version): {G(c03)} ({c03.Count}).\n" +
-            "First solved: year (Waterloo milestones) and CPU time where published (usa13509, d15112, pla85900). 1998 Alpha: the 1977-1992 record instances re-solved by Applegate, Bixby, Chvátal and Cook " +
-            "(Documenta Math. ICM 1998, 400 MHz AlphaServer); the original 1977-1991 run times are only in the original papers, not in the sources used.";
+            "First solved: date and solution time of the first optimality proof — National and VLSI instances from their Waterloo 'Log of Computation' pages (Concorde, 2001 Athlon 1.33 GHz / 2002 Athlon 1900+); " +
+            "TSPLIB: usa13509, d15112, pla85900 (published CPU years). 1998 Alpha: the 1977-1992 TSPLIB records re-solved by Applegate, Bixby, Chvátal and Cook (Documenta Math. ICM 1998, 400 MHz AlphaServer); " +
+            "the original 1977-1991 TSPLIB run times are only in the original papers. Hardware differs per row: ratios compare this machine with the published one.";
         if (!_campaignActive)
             _campStatus.Text = $"{inst.Count} instances (n <= {(int)(_campMaxN.Value ?? 0)}), {total} results in {dir}";
     }

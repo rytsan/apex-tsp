@@ -73,6 +73,73 @@ pla85900 mona-lisa100K""".split()
 HISTORY_ONLY = {"dantzig42": "EXPLICIT", "gr120": "EXPLICIT", "att532": "ATT", "gr666": "GEO"}
 
 
+# Waterloo collections (EUC_2D): National TSPs and VLSI. Each instance has a "Log of Computation"
+# page with the date it was solved, the solution time and the machine; the summary page gives the
+# best tour / bound. Instances up to SET_MAX_N nodes join the benchmark set.
+WATERLOO = {
+    "national": ("https://www.math.uwaterloo.ca/tsp/world/", ["countries.html"], r'href="\.?/?([a-z]{2}log\.html)"'),
+    "vlsi": ("https://www.math.uwaterloo.ca/tsp/vlsi/", ["index.html"] + [f"page{k}.html" for k in range(2, 12)],
+             r'href="\.?/?([a-z]+\d+\.log\.html)"'),
+}
+SET_MAX_N = 1002
+UNIT_S = {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400, "years": 365.25 * 86400}
+
+
+def parse_time(said):
+    """'560,951 seconds, AMD Athlon 1900+' -> (seconds, '560,951 seconds', 'AMD Athlon 1900+')."""
+    m = re.match(r"([\d.,]+)\s*(million\s+)?(seconds|minutes|hours|days|years)\s*,?\s*(.*)", said)
+    if not m:
+        return None, said, ""
+    v = float(m.group(1).replace(",", "")) * (1e6 if m.group(2) else 1) * UNIT_S[m.group(3)]
+    return v, said[: m.end(3)].strip(), m.group(4).strip()
+
+
+def waterloo_rows():
+    rows, skipped = [], []
+    for coll, (base, pages, link) in WATERLOO.items():
+        logs = set()
+        for pg in pages:
+            logs |= set(re.findall(link, get(base + pg).decode("latin1")))
+        summ = text(base + "summary.html")
+        best = {}
+        for name, gap, bound, tour in re.findall(r"\b([a-z]+\d+) (Optimal|[\d.]+%) ([\d,.]+) ([\d,.]+)", summ):
+            best[name] = (gap, int(re.sub(r"[,.]", "", tour)), bound)  # "9.352" (qa194) is a typo for 9,352
+        for lg in sorted(logs):
+            t = text(base + lg)
+            n = int(re.search(r"Number of Cities: ([\d,]+)", t).group(1).replace(",", ""))
+            name = next((k for k in best if lg.startswith(k[:2]) and re.sub(r"\D", "", k) == str(n)), None) if coll == "national" else lg.split(".")[0]
+            if name is None or name not in best:
+                skipped.append(lg)
+                continue
+            gap, tour, bound = best[name]
+            ov = re.search(r"Optimal Value: ([\d,]+)", t)
+            if ov and gap == "Optimal" and int(ov.group(1).replace(",", "")) != tour:
+                sys.exit(f"{name}: log optimal value {ov.group(1)} != summary {tour}")
+            solved = re.search(r"Solved: (\w+ \d+, (\d{4}))", t)
+            st = re.search(r"Solution Time: (.+?)(?: History| Notes| Note \d)", t)
+            r = {"collection": coll, "instance": name, "n": n, "metric": "EUC_2D",
+                 "in_set": "yes" if n <= SET_MAX_N and gap == "Optimal" else "no",
+                 "value": tour, "value_kind": "optimal" if gap == "Optimal" else "best_known_tour", "value_source": base + "summary.html"}
+            if gap != "Optimal":
+                r["note"] = f"open: best bound {bound} (gap {gap})"
+            elif n > SET_MAX_N:
+                r["note"] = f"not in the campaign set (n > {SET_MAX_N})"
+            if solved:
+                r.update(year_solved=solved.group(2), solved_on=solved.group(1), solved_by="Concorde (Applegate, Bixby, Chvatal, Cook)" if st else "",
+                         history_source=base + lg)
+            if st:
+                sec, said, hw = parse_time(st.group(1).strip())
+                r.update(first_solve_s="" if sec is None else round(sec, 2), first_solve_as_stated=said, first_solve_hw=hw,
+                         first_solve_source=base + lg)
+            elif solved:
+                r["first_solve_note"] = "the log gives the history of bound / tour improvements, not one solution time"
+            r["url"] = base + name + ".tsp"
+            rows.append(r)
+    if skipped:
+        print("logs without a summary row:", skipped, file=sys.stderr)
+    return rows
+
+
 def get(url):
     req = urllib.request.Request(url, headers={"User-Agent": "apex-tsp-reference/1"})
     return urllib.request.urlopen(req, timeout=300).read()
@@ -125,8 +192,8 @@ def parse_bench(t, names, order):
     return out
 
 
-def file_info(name):
-    url = MONA_URL if name == "mona-lisa100K" else TSPLIB + name + ".tsp.gz"
+def file_info(name, url=None):
+    url = url or (MONA_URL if name == "mona-lisa100K" else TSPLIB + name + ".tsp.gz")
     raw = get(url)
     if url.endswith(".gz"):
         raw = gzip.decompress(raw)
@@ -185,9 +252,18 @@ def main():
             r.update(concorde03_s=s, concorde03_nodes=nodes, concorde03_hw=HW03, concorde03_source=SOURCES["concorde03"])
         if not in_set:
             r["note"] = f"{metric} metric: not run (the engine reads EUC_2D / CEIL_2D)"
+        r["collection"] = "mona_lisa" if name == "mona-lisa100K" else "tsplib"
         rows.append(r)
 
-    cols = ["instance", "n", "metric", "in_set", "value", "value_kind", "value_source", "year_solved", "solved_by",
+    for r in waterloo_rows():
+        if r["in_set"] == "yes":
+            url, sha, size, n, metric = file_info(r["instance"], r["url"])
+            if metric != "EUC_2D" or n != r["n"]:
+                sys.exit(f"{r['instance']}: file says {metric} n={n}")
+            manifest.append({"instance": r["instance"], "url": url, "sha256": sha, "bytes": size})
+        rows.append(r)
+
+    cols = ["collection", "instance", "n", "metric", "in_set", "value", "value_kind", "value_source", "year_solved", "solved_on", "solved_by",
             "history_source", "first_solve_s", "first_solve_as_stated", "first_solve_hw", "first_solve_source", "first_solve_note",
             "abcc98_s", "abcc98_as_stated", "abcc98_hw", "abcc98_source",
             "concorde99_s", "concorde99_nodes", "concorde99_raw", "concorde99_hw", "concorde99_source",
