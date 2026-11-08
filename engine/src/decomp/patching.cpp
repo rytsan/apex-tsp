@@ -1,6 +1,7 @@
 #include "decomp/patching.hpp"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <atomic>
@@ -171,6 +172,24 @@ Tour decompose_and_patch(const Instance& inst, const CandidateGraph& g, const De
     DecompStats st;
     const auto t0 = Clock::now();
     const auto tree = cfg.density ? build_density_tree(inst, cfg.max_leaf) : build_kdtree(inst, cfg.max_leaf);
+    if (cfg.leaf.on_cluster_box) {  // children come after their parent: boxes bottom-up in reverse
+        std::vector<std::array<double, 4>> box(tree.size(), {INFINITY, INFINITY, -INFINITY, -INFINITY});
+        for (size_t k = tree.size(); k-- > 0;) {
+            auto& b = box[k];
+            for (uint32_t p : tree[k].points) {
+                b[0] = std::min(b[0], inst.xs[p]); b[1] = std::min(b[1], inst.ys[p]);
+                b[2] = std::max(b[2], inst.xs[p]); b[3] = std::max(b[3], inst.ys[p]);
+            }
+            for (int32_t c : {tree[k].left, tree[k].right}) {
+                if (c < 0) continue;
+                const auto& cb = box[static_cast<size_t>(c)];
+                b[0] = std::min(b[0], cb[0]); b[1] = std::min(b[1], cb[1]);
+                b[2] = std::max(b[2], cb[2]); b[3] = std::max(b[3], cb[3]);
+            }
+        }
+        for (size_t k = 0; k < tree.size(); ++k)
+            cfg.leaf.on_cluster_box(static_cast<uint32_t>(k), box[k][0], box[k][1], box[k][2], box[k][3]);
+    }
     auto cycles = solve_leaves(inst, tree, cfg.leaf, &st.leaf);
     for (const auto& c : cycles) {
         if (c.size() < 2) continue;

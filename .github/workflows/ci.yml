@@ -63,3 +63,37 @@ jobs:
             { grep -E -A3 "ERROR:|runtime error|error:" test.log | head -40; grep -E "TEST CASE|test cases" test.log | head -10; } | while IFS= read -r line; do echo "::error::${line}"; done
             exit 1
           fi
+
+  gui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache instances
+        uses: actions/cache@v4
+        with:
+          path: data
+          key: tsplib-instances-v3
+
+      - name: Fetch instances
+        shell: bash
+        run: bash engine/tools/fetch_instances.sh
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build engine (the GUI tests talk to it)
+        working-directory: engine
+        run: |
+          sudo apt-get update && sudo apt-get install -y ninja-build
+          cmake --preset dev-gcc
+          cmake --build --preset dev-gcc --target engine
+
+      - name: Test GUI
+        working-directory: gui
+        run: dotnet test ApexTsp.Tests -c Release --logger "console;verbosity=normal"
+
+      - name: NativeAOT publish
+        working-directory: gui
+        run: dotnet publish ApexTsp.Gui -c Release -r linux-x64 -p:PublishAot=true -o aot

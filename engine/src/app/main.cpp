@@ -179,7 +179,13 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         dc.leaf.exact_limit = opt.leaf_exact_limit;
         dc.leaf.threads = opt.threads;
         dc.leaf.seed = rng();
-        if (ipc && opt.mode == "scalable") dc.leaf.on_cluster = [&](uint32_t id, uint8_t s) { ipc->cluster_state(id, s); };
+        if (ipc && opt.mode == "scalable") {
+            dc.leaf.on_cluster = [&](uint32_t id, uint8_t s) { ipc->cluster_state(id, s); };
+            dc.leaf.on_cluster_box = [&](uint32_t id, double x0, double y0, double x1, double y1) {
+                tel.event("cluster_box", {{"id", std::to_string(id)}, {"x0", fmt(x0, 1)}, {"y0", fmt(y0, 1)},
+                                          {"x1", fmt(x1, 1)}, {"y1", fmt(y1, 1)}});
+            };
+        }
         apex::ConstructStats cs;
         auto dt = apex::construct_tour(inst, g, dc, &cs);
         const auto& ds = cs.decomp;

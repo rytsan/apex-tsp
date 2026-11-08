@@ -20,6 +20,8 @@ struct LeafConfig {
     // Progress (GUI cluster map, M5.2): (KD-tree node index, state) with state 0 idle, 1 solving,
     // 2 patching. Called from worker threads; observation only.
     std::function<void(uint32_t, uint8_t)> on_cluster;
+    // Bounding box of every KD-tree node (id, x0, y0, x1, y1), once before the leaves are solved.
+    std::function<void(uint32_t, double, double, double, double)> on_cluster_box;
 };
 
 struct LeafStats {

@@ -1,0 +1,208 @@
+using System.Diagnostics;
+using SkiaSharp;
+
+namespace ApexTsp.Render;
+
+// LOD levels, from close to far: every node and tour edge; one point per pixel and every k-th
+// tour vertex; grid cells aggregated; density heatmap.
+public enum LodLevel { Raw, Decimated, Clusters, Heatmap }
+
+public readonly record struct RenderStats(LodLevel Level, int Visible, int Points, int Segments, double Ms);
+
+// SkiaSharp renderer of a Scene (M5.3). Raw drawing only while at most RawLimit nodes are on
+// screen; beyond that the level follows the on-screen density (visible nodes per pixel).
+public sealed class TourRenderer
+{
+    public int RawLimit { get; set; } = 50_000;
+    public double DecimatedMaxDensity { get; set; } = 0.25;
+    public double ClustersMaxDensity { get; set; } = 2.0;
+    public int ClusterCellPx { get; set; } = 6;
+    public int HeatCellPx { get; set; } = 12;
+    public bool ClusterOverlay { get; set; } = true;   // CLUSTER_MAP heatmap overlay
+    public LodLevel? Force { get; set; }
+
+    private float[] _sx = [], _sy = [];
+    private bool[] _vis = [];
+    private SKPoint[] _pts = [];
+    private int[] _cells = [];
+    private readonly SKPaint _tourPaint = new() { Color = new SKColor(0x2B, 0x7B, 0xE4), StrokeWidth = 0, IsAntialias = false, Style = SKPaintStyle.Stroke };
+    private readonly SKPaint _nodePaint = new() { Color = new SKColor(0x20, 0x20, 0x20), StrokeWidth = 2, IsAntialias = false };
+    private readonly SKPaint _fill = new() { Style = SKPaintStyle.Fill, IsAntialias = false };
+    private readonly SKPaint _boxPaint = new() { Style = SKPaintStyle.Stroke, StrokeWidth = 0, IsAntialias = false };
+
+    public LodLevel Choose(int visible, int width, int height)
+    {
+        if (Force is { } f) return f;
+        if (visible <= RawLimit) return LodLevel.Raw;
+        var density = visible / Math.Max(1.0, (double)width * height);
+        if (density <= DecimatedMaxDensity) return LodLevel.Decimated;
+        return density <= ClustersMaxDensity ? LodLevel.Clusters : LodLevel.Heatmap;
+    }
+
+    public RenderStats Render(SKCanvas canvas, Scene s, in Viewport v)
+    {
+        var sw = Stopwatch.StartNew();
+        canvas.Clear(SKColors.White);
+        var n = s.Count;
+        if (_sx.Length < n) { _sx = new float[n]; _sy = new float[n]; _vis = new bool[n]; _pts = new SKPoint[n]; }
+        int W = v.Width, H = v.Height, visible = 0;
+        for (var i = 0; i < n; ++i)
+        {
+            var x = v.Sx(s.X[i]);
+            var y = v.Sy(s.Y[i]);
+            _sx[i] = x;
+            _sy[i] = y;
+            var on = x >= 0 && y >= 0 && x < W && y < H;
+            _vis[i] = on;
+            if (on) ++visible;
+        }
+        var level = Choose(visible, W, H);
+        int points = 0, segments = 0;
+        switch (level)
+        {
+            case LodLevel.Raw:
+                segments = DrawTour(canvas, s, 1, W, H);
+                for (var i = 0; i < n; ++i)
+                    if (_vis[i]) _pts[points++] = new SKPoint(_sx[i], _sy[i]);
+                canvas.DrawPoints(SKPointMode.Points, _pts.AsSpan(0, points).ToArray(), _nodePaint);
+                break;
+            case LodLevel.Decimated:
+            {
+                var k = (int)Math.Ceiling((double)visible / RawLimit);
+                segments = DrawTour(canvas, s, k, W, H);
+                var occ = Cells(W * H);
+                for (var i = 0; i < n; ++i)
+                {
+                    if (!_vis[i]) continue;
+                    var c = (int)_sy[i] * W + (int)_sx[i];
+                    if (occ[c]++ == 0) _pts[points++] = new SKPoint(_sx[i], _sy[i]);
+                }
+                canvas.DrawPoints(SKPointMode.Points, _pts.AsSpan(0, points).ToArray(), _nodePaint);
+                break;
+            }
+            case LodLevel.Clusters:
+                points = DrawCells(canvas, n, ClusterCellPx, W, H, heat: false);
+                segments = DrawCellTour(canvas, s, ClusterCellPx, W, H);
+                break;
+            case LodLevel.Heatmap:
+                points = DrawCells(canvas, n, HeatCellPx, W, H, heat: true);
+                break;
+        }
+        if (ClusterOverlay) DrawClusterBoxes(canvas, s, v);
+        canvas.Flush();
+        return new RenderStats(level, visible, points, segments, sw.Elapsed.TotalMilliseconds);
+    }
+
+    private int[] Cells(int size)
+    {
+        if (_cells.Length < size) _cells = new int[size];
+        else Array.Clear(_cells, 0, size);
+        return _cells;
+    }
+
+    // Tour as one path through every k-th vertex; segments entirely off screen are skipped.
+    private int DrawTour(SKCanvas canvas, Scene s, int k, int W, int H)
+    {
+        var m = Math.Min(s.TourCount, s.Tour.Length);
+        if (m < 2) return 0;
+        using var path = new SKPath();
+        var segments = 0;
+        uint prev = uint.MaxValue;
+        var pen = false;
+        for (var j = 0; j <= m; j += k)
+        {
+            var node = s.Tour[j == m ? 0 : j];
+            if (node >= s.Count) { pen = false; continue; }
+            if (prev != uint.MaxValue && SegmentVisible(prev, node, W, H))
+            {
+                if (!pen) path.MoveTo(_sx[prev], _sy[prev]);
+                path.LineTo(_sx[node], _sy[node]);
+                pen = true;
+                ++segments;
+            }
+            else pen = false;
+            prev = node;
+            if (j < m && j + k > m) j = m - k;  // close the cycle through the first vertex
+        }
+        canvas.DrawPath(path, _tourPaint);
+        return segments;
+    }
+
+    private bool SegmentVisible(uint a, uint b, int W, int H)
+    {
+        if (_vis[a] || _vis[b]) return true;
+        float x0 = _sx[a], x1 = _sx[b], y0 = _sy[a], y1 = _sy[b];
+        return !((x0 < 0 && x1 < 0) || (y0 < 0 && y1 < 0) || (x0 >= W && x1 >= W) || (y0 >= H && y1 >= H));
+    }
+
+    // Aggregated grid: square per non-empty cell, opacity (clusters) or color (heatmap) by count.
+    private int DrawCells(SKCanvas canvas, int n, int cell, int W, int H, bool heat)
+    {
+        int cw = (W + cell - 1) / cell, ch = (H + cell - 1) / cell;
+        var counts = Cells(cw * ch);
+        var max = 1;
+        for (var i = 0; i < n; ++i)
+        {
+            if (!_vis[i]) continue;
+            var c = (int)_sy[i] / cell * cw + (int)_sx[i] / cell;
+            max = Math.Max(max, ++counts[c]);
+        }
+        var logMax = Math.Log(1 + max);
+        var drawn = 0;
+        for (var c = 0; c < cw * ch; ++c)
+        {
+            if (counts[c] == 0) continue;
+            var t = Math.Log(1 + counts[c]) / logMax;
+            _fill.Color = heat ? Ramp(t) : new SKColor(0x20, 0x20, 0x20, (byte)(60 + 195 * t));
+            canvas.DrawRect(c % cw * cell, c / cw * cell, cell, cell, _fill);
+            ++drawn;
+        }
+        return drawn;
+    }
+
+    // Tour through the sequence of grid cells it visits (consecutive repeats merged).
+    private int DrawCellTour(SKCanvas canvas, Scene s, int cell, int W, int H)
+    {
+        var m = Math.Min(s.TourCount, s.Tour.Length);
+        if (m < 2) return 0;
+        using var path = new SKPath();
+        int last = -1, segments = 0;
+        var pen = false;
+        int cw = (W + cell - 1) / cell;
+        for (var j = 0; j <= m; ++j)
+        {
+            var node = s.Tour[j == m ? 0 : j];
+            if (node >= s.Count || !_vis[node]) { pen = false; last = -1; continue; }
+            var c = (int)_sy[node] / cell * cw + (int)_sx[node] / cell;
+            if (c == last) continue;
+            float x = c % cw * cell + cell / 2f, y = c / cw * cell + cell / 2f;
+            if (!pen) { path.MoveTo(x, y); pen = true; }
+            else { path.LineTo(x, y); ++segments; }
+            last = c;
+        }
+        canvas.DrawPath(path, _tourPaint);
+        return segments;
+    }
+
+    private void DrawClusterBoxes(SKCanvas canvas, Scene s, in Viewport v)
+    {
+        foreach (var b in s.Clusters)
+        {
+            if (b.State == 0) continue;
+            float x0 = v.Sx(b.X0), x1 = v.Sx(b.X1), y0 = v.Sy(b.Y1), y1 = v.Sy(b.Y0);
+            var col = b.State == 1 ? new SKColor(0xFF, 0x98, 0x00) : new SKColor(0xE5, 0x39, 0x35);
+            _fill.Color = col.WithAlpha(50);
+            canvas.DrawRect(x0, y0, x1 - x0, y1 - y0, _fill);
+            _boxPaint.Color = col;
+            canvas.DrawRect(x0, y0, x1 - x0, y1 - y0, _boxPaint);
+        }
+    }
+
+    private static SKColor Ramp(double t)  // blue -> yellow -> red
+    {
+        t = Math.Clamp(t, 0, 1);
+        return t < 0.5
+            ? new SKColor((byte)(510 * t), (byte)(510 * t), (byte)(255 * (1 - 2 * t)))
+            : new SKColor(255, (byte)(255 * (2 - 2 * t)), 0);
+    }
+}

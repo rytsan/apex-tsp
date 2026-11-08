@@ -3,3 +3,7 @@ build/
 out/
 .vs/
 *.tour
+gui/**/bin/
+gui/**/obj/
+engine/test.log
+engine/build.log
