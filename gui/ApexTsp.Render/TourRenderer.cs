@@ -20,6 +20,10 @@ public sealed class TourRenderer
     public int HeatCellPx { get; set; } = 12;
     public bool ClusterOverlay { get; set; } = true;   // CLUSTER_MAP heatmap overlay
     public LodLevel? Force { get; set; }
+    // Theme colors (the app switches them with the light / dark theme).
+    public SKColor Background { get; set; } = SKColors.White;
+    public SKColor TourColor { get => _tourPaint.Color; set => _tourPaint.Color = value; }
+    public SKColor NodeColor { get => _nodePaint.Color; set => _nodePaint.Color = value; }
 
     private float[] _sx = [], _sy = [];
     private bool[] _vis = [];
@@ -42,7 +46,7 @@ public sealed class TourRenderer
     public RenderStats Render(SKCanvas canvas, Scene s, in Viewport v)
     {
         var sw = Stopwatch.StartNew();
-        canvas.Clear(SKColors.White);
+        canvas.Clear(Background);
         var n = s.Count;
         if (_sx.Length < n) { _sx = new float[n]; _sy = new float[n]; _vis = new bool[n]; _pts = new SKPoint[n]; }
         int W = v.Width, H = v.Height, visible = 0;
@@ -153,7 +157,7 @@ public sealed class TourRenderer
         {
             if (counts[c] == 0) continue;
             var t = Math.Log(1 + counts[c]) / logMax;
-            _fill.Color = heat ? Ramp(t) : new SKColor(0x20, 0x20, 0x20, (byte)(60 + 195 * t));
+            _fill.Color = heat ? Ramp(t) : NodeColor.WithAlpha((byte)(60 + 195 * t));
             canvas.DrawRect(c % cw * cell, c / cw * cell, cell, cell, _fill);
             ++drawn;
         }

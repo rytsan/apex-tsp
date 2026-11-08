@@ -19,6 +19,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
     public event PropertyChangedEventHandler? PropertyChanged;
     public event Action? HistoryChanged;
+    public event Action<string>? LogAdded;
+    public int LogCapacity { get; init; } = 5000;
     public event Action<uint, float, float, float, float>? ClusterBox;  // id, x0, y0, x1, y1
 
     public IReadOnlyList<BoundSample> History => _history;
@@ -64,7 +66,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public void OnLog(string line)
     {
         LogTail.Add(line);
-        if (LogTail.Count > 200) LogTail.RemoveRange(0, LogTail.Count - 200);
+        if (LogTail.Count > LogCapacity) LogTail.RemoveRange(0, LogTail.Count - LogCapacity);
+        LogAdded?.Invoke(line);
         if (line.StartsWith("cluster_box ", StringComparison.Ordinal))
         {
             var kv = ParseFields(line);
@@ -88,6 +91,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Changed();
     }
 
+    public double WallS { get; private set; }
+
     public void OnFinished(string json)
     {
         ReportJson = json;
@@ -95,12 +100,65 @@ public sealed class MainViewModel : INotifyPropertyChanged
         try
         {
             using var doc = JsonDocument.Parse(json);
-            Status = doc.RootElement.GetProperty("status").GetString() ?? "done";
+            var r = doc.RootElement;
+            Status = r.GetProperty("status").GetString() ?? "done";
+            double Num(string k) => r.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetDouble() : double.NaN;
+            UpperBound = Num("ub");
+            LowerBound = Num("lb");
+            GapPct = Num("gap_pct");
+            WallS = Num("wall_s");
+            if (r.TryGetProperty("lb_source", out var src) && src.ValueKind == JsonValueKind.String && !double.IsNaN(LowerBound))
+                LbSource = src.GetString() ?? LbSource;
+            if (r.TryGetProperty("mode", out var mode) && mode.ValueKind == JsonValueKind.String) Mode = mode.GetString() ?? Mode;
         }
-        catch (JsonException) { Status = "done (bad report)"; }
+        catch (Exception e) when (e is JsonException or KeyNotFoundException or InvalidOperationException) { Status = "done (bad report)"; }
         Phase = "done";
         Changed();
     }
+
+    // New run: clear everything from the previous one.
+    public void Reset()
+    {
+        _history.Clear();
+        _lastSeq = 0;
+        UpperBound = LowerBound = GapPct = double.NaN;
+        Phase = Mode = LbSource = "-";
+        CutPoolSize = OpenNodes = 0;
+        IterPerSec = 0;
+        RamBytes = 0;
+        WallS = 0;
+        Status = "connecting";
+        ReportJson = "";
+        Finished = false;
+        LogTail.Clear();
+        Changed();
+        HistoryChanged?.Invoke();
+    }
+
+    // Stored run -> panels (history tab).
+    public void LoadRecord(RunRecord r, string reportJson)
+    {
+        Reset();
+        _history.AddRange(r.Bounds);
+        if (reportJson.Length > 0) OnFinished(reportJson);
+        else
+        {
+            Status = r.Status;
+            UpperBound = r.Ub;
+            LowerBound = r.Lb;
+            GapPct = r.GapPct;
+            Finished = true;
+            Changed();
+        }
+        HistoryChanged?.Invoke();
+    }
+
+    public RunRecord ToRecord(string id, string instance, string name, DateTimeOffset started, RunSettings settings) => new()
+    {
+        Id = id, Instance = instance, InstanceName = name, Started = started, Settings = settings.Clone(),
+        Status = Status, Ub = UpperBound, Lb = LowerBound, GapPct = GapPct, WallS = WallS, LbSource = LbSource,
+        Bounds = [.. _history],
+    };
 
     public void OnClosed(string reason)
     {

@@ -1,157 +1,615 @@
-using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using ApexTsp.Ipc;
 using ApexTsp.Render;
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
+using Avalonia.Input;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Media.Imaging;
+using Avalonia.Platform.Storage;
+using Avalonia.Styling;
 using Avalonia.Threading;
 
 namespace ApexTsp.Gui;
 
-public sealed class MainWindow : Window
+// App shell (Sprint 6 M6.2): toolbar, tabs Solve | Runs | Log, instance and run settings in the
+// window, run history. Built in code (no XAML), so NativeAOT needs no reflection.
+public sealed partial class MainWindow : Window
 {
     private readonly GuiOptions _opt;
+    private readonly AppStore _store;
+    private readonly AppSettings _settings;
     private readonly MainViewModel _vm = new();
     private readonly MapView _map = new();
-    private readonly GapChart _chart = new() { Height = 150 };
-    private readonly TextBlock _bounds = new(), _phase = new(), _stats = new(), _status = new(), _ramText = new();
-    private readonly Border _badge = new() { CornerRadius = new CornerRadius(4), Padding = new Thickness(6, 2) };
-    private readonly TextBlock _badgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.SemiBold };
-    private readonly ProgressBar _ram = new() { Minimum = 0, Maximum = 1, Height = 10 };
-    private readonly TextBox _report = new() { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 220, FontFamily = new FontFamily("monospace"), FontSize = 11 };
+    private readonly GapChart _chart = new() { Height = 170 };
+    private Palette _pal = Palette.Light;
+
+    // Solve tab: instance card
+    private readonly TextBlock _instTitle = new() { FontSize = 18, FontWeight = FontWeight.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis };
+    private readonly TextBlock _instDetails = new() { TextWrapping = TextWrapping.Wrap };
+    // settings card
+    private readonly ComboBox _mode = new() { ItemsSource = RunSettings.Modes, MinWidth = 140 };
+    private readonly NumericUpDown _time = new() { Minimum = 1, Maximum = 86400 * 7, Increment = 60, FormatString = "0", MinWidth = 140 };
+    private readonly NumericUpDown _threads = new() { Minimum = 1, Maximum = 256, Increment = 1, FormatString = "0", MinWidth = 140 };
+    private readonly NumericUpDown _seed = new() { Minimum = 0, Maximum = uint.MaxValue, Increment = 1, FormatString = "0", MinWidth = 140 };
+    private readonly NumericUpDown _mem = new() { Minimum = 64, Maximum = 1 << 20, Increment = 512, FormatString = "0", MinWidth = 140 };
+    private readonly TextBox _ckDir = new() { Watermark = "none", MinWidth = 140 };
+    private readonly CheckBox _resume = new() { Content = "resume from checkpoint" };
+    private readonly TextBlock _settingsError = new() { TextWrapping = TextWrapping.Wrap };
+    // bounds card
+    private readonly TextBlock _bounds = new() { FontSize = 15, FontWeight = FontWeight.SemiBold }, _phase = new(), _stats = new(), _status = new(), _ramText = new();
+    private readonly Border _badge = new() { CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 2) };
+    private readonly TextBlock _badgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.SemiBold, FontSize = 11 };
+    private readonly ProgressBar _ram = new() { Minimum = 0, Maximum = 1, Height = 6 };
+    private readonly TextBox _report = new() { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 180, FontFamily = new FontFamily("monospace"), FontSize = 11 };
     private readonly CheckBox _overlay = new() { Content = "cluster heatmap overlay", IsChecked = true };
-    private readonly Dictionary<ulong, MsgType> _sent = [];
-    private EngineClient? _client;
-    private SharedTourReader? _tourReader;
-    private Process? _engine;
-    private string _sharedTour = "";
-    private DispatcherTimer? _demo;
-    private int _demoStep;
+    // toolbar
+    private readonly Button _startBtn = new(), _pauseBtn = new(), _resumeBtn = new(), _cancelBtn = new(), _ckBtn = new();
+    private readonly Button _recentBtn = new() { Content = "Recent ▾" };
+    private readonly ComboBox _theme = new() { ItemsSource = ThemeChoice.Names, MinWidth = 100 };
+    private readonly TextBlock _statusBar = new() { VerticalAlignment = VerticalAlignment.Center };
+    // runs / log tabs
+    private readonly ListBox _runs = new() { FontFamily = new FontFamily("monospace"), FontSize = 12 };
+    private readonly TextBlock _runDetail = new() { TextWrapping = TextWrapping.Wrap };
+    private readonly CheckBox _allRuns = new() { Content = "all instances" };
+    private readonly ListBox _log = new() { FontFamily = new FontFamily("monospace"), FontSize = 11 };
+    private readonly TextBox _logFilter = new() { Watermark = "filter", MinWidth = 220 };
+    private readonly System.Collections.ObjectModel.ObservableCollection<string> _logItems = [];
+    private readonly TabControl _tabs = new();
+
+    private InstanceInfo? _inst;
+    private RunSession? _run;
+    private string _runId = "";
+    private RunSettings _runSettings = new();
+    private readonly List<(string Dir, RunRecord Run)> _runList = [];
 
     public MainWindow(GuiOptions opt)
     {
         _opt = opt;
+        _store = new AppStore(opt.Home);
+        _settings = _store.LoadSettings();
+        if (opt.Engine is not null) _settings.EnginePath = opt.Engine;
         Title = "APEX-TSP";
-        Width = 1400;
-        Height = 900;
-        _map.Scene = Scene.LoadTsplib(opt.Instance);
+        Width = 1480;
+        Height = 940;
+        MinWidth = 900;
+        MinHeight = 600;
         _badge.Child = _badgeText;
+        _log.ItemsSource = _logItems;
 
-        Button Ctl(string text, MsgType t)
-        {
-            var b = new Button { Content = text, Margin = new Thickness(0, 0, 6, 6) };
-            b.Click += (_, _) => Send(t);
-            return b;
-        }
-        _overlay.IsCheckedChanged += (_, _) => { _map.Renderer.ClusterOverlay = _overlay.IsChecked == true; _map.Invalidate(); };
-        var buttons = new WrapPanel();
-        buttons.Children.AddRange([Ctl("Pause", MsgType.Pause), Ctl("Resume", MsgType.Resume), Ctl("Cancel", MsgType.Cancel), Ctl("Checkpoint", MsgType.Checkpoint)]);
-        var side = new StackPanel { Spacing = 6, Margin = new Thickness(10) };
-        side.Children.AddRange([
-            new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _badge, _phase } },
-            _bounds, _chart, _stats, new TextBlock { Text = "RAM vs ceiling" }, _ram, _ramText, _overlay, buttons, _status,
-            new TextBlock { Text = "final report" }, _report,
-        ]);
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,360") };
-        grid.Children.Add(_map);
-        var scroll = new ScrollViewer { Content = side };
-        Grid.SetColumn(scroll, 1);
-        grid.Children.Add(scroll);
-        Content = grid;
+        Content = BuildLayout();
+        LoadSettingsIntoForm(_settings.Run);
+        _theme.SelectedItem = ThemeChoice.Names.Contains(_settings.Theme) ? _settings.Theme : "system";
+        _theme.SelectionChanged += (_, _) => SetTheme(_theme.SelectedItem as string ?? "system");
+        ActualThemeVariantChanged += (_, _) => ApplyPalette();
+        ApplyPalette();
 
         _vm.PropertyChanged += (_, _) => UpdatePanels();
         _vm.HistoryChanged += () => { _chart.Samples = _vm.History.ToArray(); _chart.InvalidateVisual(); };
-        _vm.ClusterBox += (id, x0, y0, x1, y1) => _map.Scene!.SetCluster(id, x0, y0, x1, y1);
+        _vm.ClusterBox += (id, x0, y0, x1, y1) => _map.Scene?.SetCluster(id, x0, y0, x1, y1);
+        _vm.LogAdded += AddLogLine;
+        _overlay.IsCheckedChanged += (_, _) => { _map.Renderer.ClusterOverlay = _overlay.IsChecked == true; _map.Invalidate(); };
+        _allRuns.IsCheckedChanged += (_, _) => RefreshRuns();
+        _runs.SelectionChanged += (_, _) => ShowRunDetail();
+        _runs.DoubleTapped += (_, _) => LoadSelectedRun();
+        _logFilter.TextChanged += (_, _) => RefilterLog();
+
+        KeyBindings.Add(Bind(Key.O, KeyModifiers.Control, () => _ = OpenDialog()));
+        KeyBindings.Add(Bind(Key.F5, KeyModifiers.None, StartRun));
+        KeyBindings.Add(Bind(Key.F6, KeyModifiers.None, () => Send(MsgType.Pause)));
+        KeyBindings.Add(Bind(Key.F7, KeyModifiers.None, () => Send(MsgType.Resume)));
+        KeyBindings.Add(Bind(Key.F5, KeyModifiers.Shift, () => Send(MsgType.Cancel)));
+        KeyBindings.Add(Bind(Key.S, KeyModifiers.Control, () => _ = SaveTourDialog()));
+        DragDrop.SetAllowDrop(this, true);
+        AddHandler(DragDrop.DropEvent, OnDrop);
+
         UpdatePanels();
-        Opened += (_, _) => Start();
-        Closing += (_, _) => Stop();
+        Opened += (_, _) => OnOpened();
+        Closing += (_, _) => { SaveSettings(); _demo?.Stop(); _run?.Dispose(); };
     }
 
-    private void Start()
+    private static KeyBinding Bind(Key k, KeyModifiers m, Action a) =>
+        new() { Gesture = new KeyGesture(k, m), Command = new RelayCommand(a) };
+
+    // ---- layout ---------------------------------------------------------------------------
+
+    private Control BuildLayout()
     {
-        var endpoint = _opt.Attach ?? _opt.Endpoint ?? (OperatingSystem.IsWindows()
-            ? $"apex_tsp_gui_{Environment.ProcessId}"
-            : Path.Combine(Path.GetTempPath(), $"apex_tsp_gui_{Environment.ProcessId}.sock"));
-        _sharedTour = _opt.SharedTour ?? Path.Combine(Path.GetTempPath(), $"apex_tsp_gui_{Environment.ProcessId}.tour");
-        if (_opt.Engine is not null) LaunchEngine(endpoint);
-        Task.Run(() =>
+        Button Tool(string text, string tip, Action a, Button? b = null)
         {
-            try
+            b ??= new Button();
+            b.Content = text;
+            b.Margin = new Thickness(0, 0, 4, 0);
+            b.Padding = new Thickness(10, 5);
+            ToolTip.SetTip(b, tip);
+            b.Click += (_, _) => a();
+            return b;
+        }
+        Control Sep() => new Border { Width = 1, Margin = new Thickness(6, 4), Background = Brushes.Gray, Opacity = 0.3 };
+        var bar = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(10, 8), Spacing = 0 };
+        bar.Children.AddRange([
+            Tool("Open…", "Open a TSPLIB instance (Ctrl+O, or drop a .tsp on the window)", () => _ = OpenDialog()),
+            Tool("Recent ▾", "Recently opened instances", ShowRecent, _recentBtn), Sep(),
+            Tool("▶ Start", "Start a run with the settings on the right (F5)", StartRun, _startBtn),
+            Tool("Pause", "Pause the solver (F6)", () => Send(MsgType.Pause), _pauseBtn),
+            Tool("Resume", "Resume (F7)", () => Send(MsgType.Resume), _resumeBtn),
+            Tool("Cancel", "Stop the run; the best tour so far is kept (Shift+F5)", () => Send(MsgType.Cancel), _cancelBtn),
+            Tool("Checkpoint", "Write a checkpoint now (needs a checkpoint directory)", () => Send(MsgType.Checkpoint), _ckBtn), Sep(),
+            Tool("Save tour…", "Save the current tour as TSPLIB .tour (Ctrl+S)", () => _ = SaveTourDialog()),
+            Tool("Export ▾", "Export the map (PNG / SVG) or the run report (JSON)", ShowExport), Sep(),
+            new TextBlock { Text = "theme", VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(4, 0) }, _theme,
+        ]);
+
+        // Solve tab
+        var side = new StackPanel { Spacing = 10, Margin = new Thickness(12) };
+        var form = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), RowSpacing = 6, ColumnSpacing = 10 };
+        void Row(int r, string label, Control c)
+        {
+            form.RowDefinitions.Add(new RowDefinition(GridLength.Auto));
+            var t = new TextBlock { Text = label, VerticalAlignment = VerticalAlignment.Center };
+            Grid.SetRow(t, r);
+            Grid.SetRow(c, r);
+            Grid.SetColumn(c, 1);
+            form.Children.Add(t);
+            form.Children.Add(c);
+        }
+        var ckRow = new DockPanel();
+        var browse = new Button { Content = "…", Margin = new Thickness(4, 0, 0, 0) };
+        browse.Click += async (_, _) => await PickCheckpointDir();
+        DockPanel.SetDock(browse, Dock.Right);
+        ckRow.Children.AddRange([browse, _ckDir]);
+        Row(0, "mode", _mode);
+        Row(1, "time limit (s)", _time);
+        Row(2, "threads", _threads);
+        Row(3, "seed", _seed);
+        Row(4, "memory ceiling (MB)", _mem);
+        Row(5, "checkpoint dir", ckRow);
+        Row(6, "", _resume);
+        var buttons = new WrapPanel();
+        side.Children.AddRange([
+            Card("Instance", new StackPanel { Spacing = 4, Children = { _instTitle, _instDetails } }),
+            Card("Run settings", new StackPanel { Spacing = 6, Children = { form, _settingsError } }),
+            Card("Bounds", new StackPanel
             {
-                var c = EngineClient.Connect(endpoint, TimeSpan.FromSeconds(60));
-                c.Telemetry += p => Dispatcher.UIThread.Post(() => _vm.OnTelemetry(p));
-                c.Log += l => Dispatcher.UIThread.Post(() => _vm.OnLog(l));
-                c.Ack += seq => Dispatcher.UIThread.Post(() => { if (_sent.Remove(seq, out var t)) _vm.OnAck(t); });
-                c.ClusterMap += m => Dispatcher.UIThread.Post(() =>
+                Spacing = 6,
+                Children =
                 {
-                    foreach (var e in m) _map.Scene!.SetClusterState(e.Id, e.State);
-                    _map.Invalidate();
-                });
-                c.TourUpdate += (_, _) => ReadTour();
-                c.Finished += j => Dispatcher.UIThread.Post(() => OnFinished(j));
-                c.Closed += r => Dispatcher.UIThread.Post(() => _vm.OnClosed(r));
-                c.Start();
-                Dispatcher.UIThread.Post(() =>
-                {
-                    _client = c;
-                    _vm.RamCeilingBytes = (ulong)c.EngineHello.MemLimitMb << 20;
-                    UpdatePanels();
-                    if (_opt.DemoOut is not null) StartDemo();
-                });
-                ReadTour();
-            }
-            catch (Exception e) when (e is IOException or TimeoutException or System.Net.Sockets.SocketException)
-            {
-                Dispatcher.UIThread.Post(() => _vm.OnClosed(e.Message));
-            }
-        });
+                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _badge, _phase } },
+                    _bounds, _chart, _stats, _status,
+                    new TextBlock { Text = "RAM vs ceiling", Opacity = 0.7 }, _ram, _ramText, _overlay,
+                },
+            }),
+            Card("Final report", _report),
+        ]);
+        var solve = new Grid { ColumnDefinitions = new ColumnDefinitions("*,400") };
+        solve.Children.Add(new Border { Child = _map, ClipToBounds = true });
+        var scroll = new ScrollViewer { Content = side };
+        Grid.SetColumn(scroll, 1);
+        solve.Children.Add(scroll);
+
+        // Runs tab
+        var load = new Button { Content = "Load run", Margin = new Thickness(0, 0, 6, 0) };
+        load.Click += (_, _) => LoadSelectedRun();
+        var openDir = new Button { Content = "Open folder" };
+        openDir.Click += (_, _) => OpenRunFolder();
+        var runsTop = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 8), Children = { load, openDir, _allRuns } };
+        var runsGrid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,420"), Margin = new Thickness(12) };
+        var runsLeft = new DockPanel();
+        DockPanel.SetDock(runsTop, Dock.Top);
+        runsLeft.Children.AddRange([runsTop, _runs]);
+        runsGrid.Children.Add(runsLeft);
+        var detail = Card("Run", new ScrollViewer { Content = _runDetail });
+        detail.Margin = new Thickness(12, 0, 0, 0);
+        Grid.SetColumn(detail, 1);
+        runsGrid.Children.Add(detail);
+
+        // Log tab
+        var logPanel = new DockPanel { Margin = new Thickness(12) };
+        var logTop = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 8), Children = { _logFilter } };
+        DockPanel.SetDock(logTop, Dock.Top);
+        logPanel.Children.AddRange([logTop, _log]);
+
+        _tabs.ItemsSource = new[]
+        {
+            new TabItem { Header = "Solve", Content = solve },
+            new TabItem { Header = "Runs", Content = runsGrid },
+            new TabItem { Header = "Log", Content = logPanel },
+        };
+        var status = new Border { Padding = new Thickness(12, 4), Child = _statusBar };
+        var root = new DockPanel();
+        DockPanel.SetDock(bar, Dock.Top);
+        DockPanel.SetDock(status, Dock.Bottom);
+        root.Children.AddRange([bar, status, _tabs]);
+        return root;
     }
 
-    private void LaunchEngine(string endpoint)
+    private readonly List<Border> _cards = [];
+
+    private Border Card(string title, Control body)
     {
-        var psi = new ProcessStartInfo(_opt.Engine!) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
-        foreach (var a in new[] { "--instance", _opt.Instance, "--ipc", endpoint, "--shared-tour", _sharedTour }) psi.ArgumentList.Add(a);
-        foreach (var a in _opt.EngineArgs) psi.ArgumentList.Add(a);
-        _engine = Process.Start(psi) ?? throw new IOException("cannot start " + _opt.Engine);
-        var logPath = Path.Combine(_opt.DemoOut ?? Path.GetTempPath(), "engine.log");
-        if (_opt.DemoOut is not null) Directory.CreateDirectory(_opt.DemoOut);
-        var log = new StreamWriter(logPath, false, Encoding.UTF8) { AutoFlush = true };
-        _engine.OutputDataReceived += (_, e) => { if (e.Data is not null) lock (log) log.WriteLine(e.Data); };
-        _engine.ErrorDataReceived += (_, e) => { if (e.Data is not null) lock (log) log.WriteLine(e.Data); };
-        _engine.BeginOutputReadLine();
-        _engine.BeginErrorReadLine();
+        var b = new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            Padding = new Thickness(12),
+            BorderThickness = new Thickness(1),
+            Child = new StackPanel
+            {
+                Spacing = 8,
+                Children = { new TextBlock { Text = title.ToUpperInvariant(), FontSize = 11, FontWeight = FontWeight.SemiBold, Opacity = 0.65 }, body },
+            },
+        };
+        _cards.Add(b);
+        return b;
     }
 
-    // Reader thread: copy the SharedTour (seqlock; never blocks the engine), then swap on the UI thread.
-    private void ReadTour()
+    // ---- theme --------------------------------------------------------------------------
+
+    private void SetTheme(string name)
+    {
+        _settings.Theme = name;
+        if (Application.Current is { } app) app.RequestedThemeVariant = ThemeChoice.Variant(name);
+        ApplyPalette();
+        SaveSettings();
+    }
+
+    private void ApplyPalette()
+    {
+        _pal = Palette.For(ActualThemeVariant == ThemeVariant.Dark ? ThemeVariant.Dark : ThemeVariant.Light);
+        Background = _pal.Brush(_pal.Background);
+        foreach (var c in _cards)
+        {
+            c.Background = _pal.Brush(_pal.Surface);
+            c.BorderBrush = _pal.Brush(_pal.Border);
+        }
+        _map.Renderer.Background = Palette.Sk(_pal.Surface);
+        _map.Renderer.NodeColor = Palette.Sk(_pal.MapNode);
+        _map.Renderer.TourColor = Palette.Sk(_pal.MapTour);
+        _chart.Pal = _pal;
+        _chart.InvalidateVisual();
+        _map.Invalidate();
+        UpdatePanels();
+    }
+
+    // ---- instance -----------------------------------------------------------------------
+
+    private void OnOpened()
+    {
+        var inst = _opt.Instance;
+        if (inst is not null) OpenInstance(inst);
+        else if (_settings.Recent.FirstOrDefault(File.Exists) is { } last) OpenInstance(last);
+        if (_opt.Attach is not null) AttachRun();
+        else if (_opt.DemoOut is not null) { ApplyEngineArgs(_opt.EngineArgs); StartRun(); }
+        else if (_opt.DemoApp is not null) StartAppDemo();
+        RefreshRuns();
+    }
+
+    public bool OpenInstance(string path)
     {
         try
         {
-            _tourReader ??= new SharedTourReader(_sharedTour);
-            var buf = new uint[_tourReader.Capacity];
-            if (!_tourReader.TryRead(ref buf, out var count, out _)) return;
-            Dispatcher.UIThread.Post(() => { _map.Scene!.SetTour(buf, count); _map.Invalidate(); });
+            var info = InstanceInfo.Read(path);
+            var scene = Scene.LoadTsplib(path);
+            if (_run is { Running: true }) { Toast("stop the current run before opening another instance"); return false; }
+            _inst = info;
+            _map.Scene = scene;
+            _map.Fit();
+            _vm.Reset();
+            _settings.Touch(Path.GetFullPath(path));
+            SaveSettings();
+            Title = $"APEX-TSP — {info.Name}";
+            RefreshRuns();
+            UpdatePanels();
+            return true;
         }
-        catch (IOException) { }
+        catch (Exception e) when (e is IOException or InvalidDataException or FormatException or UnauthorizedAccessException)
+        {
+            Toast("cannot open " + path + ": " + e.Message);
+            return false;
+        }
+    }
+
+    private async Task OpenDialog()
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Open TSPLIB instance",
+            AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType("TSPLIB") { Patterns = ["*.tsp"] }, FilePickerFileTypes.All],
+        });
+        if (files.Count > 0 && files[0].TryGetLocalPath() is { } p) OpenInstance(p);
+    }
+
+    private void OnDrop(object? sender, DragEventArgs e)
+    {
+        var f = e.DataTransfer.TryGetFiles()?.Select(x => x.TryGetLocalPath()).FirstOrDefault(p => p is not null);
+        if (f is not null) OpenInstance(f);
+    }
+
+    private void ShowRecent()
+    {
+        var menu = new MenuFlyout();
+        foreach (var r in _settings.Recent.Where(File.Exists))
+        {
+            var item = new MenuItem { Header = r };
+            var path = r;
+            item.Click += (_, _) => OpenInstance(path);
+            menu.Items.Add(item);
+        }
+        if (menu.Items.Count == 0) menu.Items.Add(new MenuItem { Header = "(none)", IsEnabled = false });
+        menu.ShowAt(_recentBtn);
+    }
+
+    // ---- run settings -------------------------------------------------------------------
+
+    private void LoadSettingsIntoForm(RunSettings s)
+    {
+        _mode.SelectedItem = RunSettings.Modes.Contains(s.Mode) ? s.Mode : "exact";
+        _time.Value = (decimal)s.TimeLimitS;
+        _threads.Value = s.Threads;
+        _seed.Value = s.Seed;
+        _mem.Value = s.MemLimitMb;
+        _ckDir.Text = s.CheckpointDir;
+        _resume.IsChecked = s.Resume;
+    }
+
+    private RunSettings ReadForm() => new()
+    {
+        Mode = _mode.SelectedItem as string ?? "exact",
+        TimeLimitS = (double)(_time.Value ?? 600),
+        Threads = (int)(_threads.Value ?? 1),
+        Seed = (ulong)(_seed.Value ?? 1),
+        MemLimitMb = (int)(_mem.Value ?? 4096),
+        CheckpointDir = _ckDir.Text?.Trim() ?? "",
+        Resume = _resume.IsChecked == true,
+    };
+
+    // Demo / command line: engine args after "--" fill the form.
+    private void ApplyEngineArgs(IReadOnlyList<string> a)
+    {
+        var s = ReadForm();
+        for (var i = 0; i + 1 < a.Count; ++i)
+        {
+            var v = a[i + 1];
+            switch (a[i])
+            {
+                case "--mode": s.Mode = v; break;
+                case "--time-limit": s.TimeLimitS = double.Parse(v, CultureInfo.InvariantCulture); break;
+                case "--threads": s.Threads = int.Parse(v, CultureInfo.InvariantCulture); break;
+                case "--seed": s.Seed = ulong.Parse(v, CultureInfo.InvariantCulture); break;
+                case "--mem-limit-mb": s.MemLimitMb = int.Parse(v, CultureInfo.InvariantCulture); break;
+                case "--checkpoint": s.CheckpointDir = v; break;
+            }
+        }
+        LoadSettingsIntoForm(s);
+    }
+
+    private async Task PickCheckpointDir()
+    {
+        var dirs = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = "Checkpoint directory" });
+        if (dirs.Count > 0 && dirs[0].TryGetLocalPath() is { } p) _ckDir.Text = p;
+    }
+
+    // ---- runs ---------------------------------------------------------------------------
+
+    private void StartRun()
+    {
+        if (_inst is null) { Toast("open an instance first"); return; }
+        if (_run is { Running: true }) { Toast("a run is already active"); return; }
+        var s = ReadForm();
+        if (s.Validate() is { } why) { _settingsError.Text = why; _settingsError.Foreground = _pal.Brush(_pal.Danger); return; }
+        _settingsError.Text = "";
+        var engine = EngineLocator.Find(_settings.EnginePath);
+        if (engine is null) { _ = LocateEngine(); return; }
+        _settings.EnginePath = engine;
+        _settings.Run = s.Clone();
+        SaveSettings();
+        _run?.Dispose();
+        _vm.Reset();
+        _logItems.Clear();
+        _runSettings = s;
+        var dir = _store.NewRunDir(_inst.Path, out _runId);
+        try { _run = RunSession.Launch(engine, _inst.Path, s, dir); }
+        catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception)
+        {
+            Toast("cannot start the engine: " + e.Message);
+            return;
+        }
+        WireSession(_run);
+        _run.ConnectAsync(TimeSpan.FromSeconds(60));
+        Toast($"run {_runId} started: {s.Mode}, {s.TimeLimitS} s, {s.Threads} threads");
+    }
+
+    private void AttachRun()
+    {
+        if (_inst is null) return;
+        var dir = _store.NewRunDir(_inst.Path, out _runId);
+        _run = RunSession.Attach(_opt.Attach!, _opt.SharedTour!, dir);
+        _runSettings = ReadForm();
+        WireSession(_run);
+        _run.ConnectAsync(TimeSpan.FromSeconds(60));
+    }
+
+    private void WireSession(RunSession s)
+    {
+        s.Connected += c =>
+        {
+            c.Telemetry += p => Dispatcher.UIThread.Post(() => _vm.OnTelemetry(p));
+            c.Log += l => Dispatcher.UIThread.Post(() => _vm.OnLog(l));
+            c.ClusterMap += m => Dispatcher.UIThread.Post(() =>
+            {
+                foreach (var e in m) _map.Scene?.SetClusterState(e.Id, e.State);
+                _map.Invalidate();
+            });
+            c.TourUpdate += (_, _) => ReadTour(s);
+            c.Finished += j => Dispatcher.UIThread.Post(() => OnFinished(s, j));
+            c.Closed += r => Dispatcher.UIThread.Post(() => _vm.OnClosed(r));
+            Dispatcher.UIThread.Post(() =>
+            {
+                _vm.RamCeilingBytes = (ulong)c.EngineHello.MemLimitMb << 20;
+                UpdatePanels();
+                if (_opt.DemoOut is not null) StartDemo();
+            });
+        };
+        s.Acked += t => Dispatcher.UIThread.Post(() => _vm.OnAck(t));
+        s.Failed += why => Dispatcher.UIThread.Post(() => _vm.OnClosed(why));
+    }
+
+    private void ReadTour(RunSession s)
+    {
+        if (!s.TryReadTour(out var buf, out var count)) return;
+        Dispatcher.UIThread.Post(() =>
+        {
+            if (_run != s || _map.Scene is null) return;
+            _map.Scene.SetTour(buf, count);
+            _map.Invalidate();
+        });
+    }
+
+    private void OnFinished(RunSession s, string json)
+    {
+        _vm.OnFinished(json);
+        ReadTour(s);
+        if (_inst is not null)
+        {
+            AppStore.SaveRecord(s.RunDir, _vm.ToRecord(_runId, _inst.Path, _inst.Name, s.Started, _runSettings));
+            RefreshRuns();
+        }
+        Toast($"run {_runId}: {_vm.Status}, UB {MainViewModel.Fmt(_vm.UpperBound)}");
+        if (_opt.DemoOut is not null) DispatcherTimer.RunOnce(FinishDemo, TimeSpan.FromMilliseconds(800));
+        DemoAppOnFinished();
     }
 
     private void Send(MsgType t)
     {
-        if (_client is null) return;
-        try { _sent[_client.Send(t)] = t; }
-        catch (IOException e) { _vm.OnClosed(e.Message); }
+        if (_run is null || !_run.Send(t)) Toast("no engine connected");
     }
+
+    private async Task LocateEngine()
+    {
+        Toast("apex_tsp not found: pick the engine binary");
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions { Title = "Locate apex_tsp", AllowMultiple = false });
+        if (files.Count > 0 && files[0].TryGetLocalPath() is { } p)
+        {
+            _settings.EnginePath = p;
+            SaveSettings();
+            StartRun();
+        }
+    }
+
+    // ---- history ------------------------------------------------------------------------
+
+    private void RefreshRuns()
+    {
+        _runList.Clear();
+        _runList.AddRange(_store.ListRuns(_allRuns.IsChecked == true || _inst is null ? null : _inst.Path));
+        _runs.ItemsSource = _runList.Select(x => RunLine(x.Run)).ToList();
+        ShowRunDetail();
+    }
+
+    public static string RunLine(RunRecord r) => string.Create(CultureInfo.InvariantCulture,
+        $"{r.Started.LocalDateTime:yyyy-MM-dd HH:mm:ss}  {r.InstanceName,-14} {r.Settings.Mode,-8} {r.Status,-15} UB {MainViewModel.Fmt(r.Ub),-12} gap {MainViewModel.Fmt(r.GapPct)}%  {r.WallS:0.0} s");
+
+    private void ShowRunDetail()
+    {
+        var i = _runs.SelectedIndex;
+        if (i < 0 || i >= _runList.Count) { _runDetail.Text = _runList.Count == 0 ? "no runs yet" : "select a run (double click loads it)"; return; }
+        var (dir, r) = _runList[i];
+        var s = r.Settings;
+        _runDetail.Text = string.Create(CultureInfo.InvariantCulture,
+            $"{r.InstanceName}  ({r.Instance})\nstarted {r.Started:yyyy-MM-dd HH:mm:ss zzz}\nstatus {r.Status}\nUB {MainViewModel.Fmt(r.Ub)}\nLB {MainViewModel.Fmt(r.Lb)} ({r.LbSource})\ngap {MainViewModel.Fmt(r.GapPct)}%\nwall {r.WallS:0.###} s\n\nmode {s.Mode}, time limit {s.TimeLimitS} s, threads {s.Threads}, seed {s.Seed}, memory {s.MemLimitMb} MB{(s.CheckpointDir.Length > 0 ? ", checkpoint " + s.CheckpointDir : "")}\n\n{dir}");
+    }
+
+    public bool LoadRun(string dir)
+    {
+        var r = AppStore.LoadRecord(dir);
+        if (r is null) return false;
+        if (_inst is null || Path.GetFullPath(_inst.Path) != Path.GetFullPath(r.Instance))
+            if (!File.Exists(r.Instance) || !OpenInstance(r.Instance)) { Toast("instance file missing: " + r.Instance); return false; }
+        var report = Path.Combine(dir, "report.json");
+        _vm.LoadRecord(r, File.Exists(report) ? File.ReadAllText(report) : "");
+        var tour = Path.Combine(dir, "tour.tour");
+        if (File.Exists(tour) && _map.Scene is not null)
+        {
+            var t = TourFiles.Read(tour);
+            _map.Scene.SetTour(t, t.Length);
+            _map.Invalidate();
+        }
+        LoadSettingsIntoForm(r.Settings);
+        _tabs.SelectedIndex = 0;
+        Toast($"loaded run {r.Id}");
+        return true;
+    }
+
+    private void LoadSelectedRun()
+    {
+        var i = _runs.SelectedIndex;
+        if (i >= 0 && i < _runList.Count) LoadRun(_runList[i].Dir);
+    }
+
+    private void OpenRunFolder()
+    {
+        var i = _runs.SelectedIndex;
+        if (i < 0 || i >= _runList.Count) return;
+        _ = Launcher.LaunchDirectoryInfoAsync(new DirectoryInfo(_runList[i].Dir));
+    }
+
+    // ---- save / export ------------------------------------------------------------------
+
+    private async Task SaveTourDialog()
+    {
+        if (_map.Scene is not { TourCount: > 0 } s || _inst is null) { Toast("no tour to save"); return; }
+        var f = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+        {
+            Title = "Save tour", SuggestedFileName = _inst.Name + ".tour", DefaultExtension = "tour",
+            FileTypeChoices = [new FilePickerFileType("TSPLIB tour") { Patterns = ["*.tour"] }],
+        });
+        if (f?.TryGetLocalPath() is { } p) SaveTour(p);
+    }
+
+    public void SaveTour(string path)
+    {
+        var s = _map.Scene!;
+        TourFiles.Write(path, _inst!.Name, s.Tour.AsSpan(0, s.TourCount), $"apex_tsp {_vm.Status} ub {MainViewModel.Fmt(_vm.UpperBound)}");
+        Toast("tour saved: " + path);
+    }
+
+    private void ShowExport()
+    {
+        var menu = new MenuFlyout();
+        void Item(string text, string ext, string type, Action<string> save)
+        {
+            var it = new MenuItem { Header = text };
+            it.Click += async (_, _) =>
+            {
+                var f = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions
+                {
+                    Title = text, SuggestedFileName = (_inst?.Name ?? "apex") + "." + ext, DefaultExtension = ext,
+                    FileTypeChoices = [new FilePickerFileType(type) { Patterns = ["*." + ext] }],
+                });
+                if (f?.TryGetLocalPath() is { } p) { save(p); Toast("saved " + p); }
+            };
+            menu.Items.Add(it);
+        }
+        Item("Map as PNG", "png", "PNG image", _map.SavePng);
+        Item("Tour as SVG", "svg", "SVG image", p =>
+        {
+            if (_map.Scene is { } s) TourFiles.WriteSvg(p, s, s.Tour.AsSpan(0, s.TourCount), _pal.MapTour.ToString());
+        });
+        Item("Run report (JSON)", "json", "JSON", p => File.WriteAllText(p, _vm.ReportJson));
+        menu.ShowAt(this, true);
+    }
+
+    // ---- panels -------------------------------------------------------------------------
 
     private void UpdatePanels()
     {
         var vm = _vm;
-        _badgeText.Text = "LB: " + vm.LbSource;
-        _badge.Background = vm.LbSource == "lp" ? new SolidColorBrush(Color.FromRgb(0x2E, 0x7D, 0x32))
-                          : vm.LbSource == "lagrangian" ? new SolidColorBrush(Color.FromRgb(0x6A, 0x1B, 0x9A)) : Brushes.Gray;
+        var src = vm.Status == "OPTIMAL_PROVEN" ? "proven" : vm.LbSource;
+        _badgeText.Text = src switch { "lp" => "LB: LP", "lagrangian" => "LB: LAGRANGIAN", "proven" => "OPTIMAL PROVEN", _ => "NO BOUND YET" };
+        _badge.Background = _pal.Brush(_pal.ForSource(src));
         _phase.Text = $"{vm.Mode} · phase {vm.Phase}";
         _bounds.Text = $"UB {MainViewModel.Fmt(vm.UpperBound)}   LB {MainViewModel.Fmt(vm.LowerBound)}   gap {MainViewModel.Fmt(vm.GapPct)}%";
         var it = vm.IterPerSec.ToString("0", CultureInfo.InvariantCulture);
@@ -159,83 +617,62 @@ public sealed class MainWindow : Window
         _ram.Value = vm.RamFraction;
         _ramText.Text = $"{vm.RamBytes >> 20} MB / {vm.RamCeilingBytes >> 20} MB";
         _status.Text = "status: " + vm.Status;
-        if (vm.Finished) _report.Text = vm.ReportJson;
-    }
-
-    private void OnFinished(string json)
-    {
-        _vm.OnFinished(json);
-        ReadTour();
-        if (_opt.DemoOut is not null) DispatcherTimer.RunOnce(FinishDemo, TimeSpan.FromMilliseconds(800));
-    }
-
-    // ---- scripted demo (G5.3 evidence): pan/zoom cycles through the input path, LOD levels,
-    // screenshots, frame-time distribution, then exit.
-    private void StartDemo()
-    {
-        Directory.CreateDirectory(_opt.DemoOut!);
-        _demo = new DispatcherTimer(TimeSpan.FromMilliseconds(33), DispatcherPriority.Background, (_, _) => DemoTick());
-        _demo.Start();
-    }
-
-    private void DemoTick()
-    {
-        if (_map.Scene!.TourCount == 0) return;
-        var cx = _map.Bounds.Width / 2;
-        var cy = _map.Bounds.Height / 2;
-        var i = _demoStep++ % 300;
-        var first = _demoStep <= 300;
-        var shot = (string name) => { if (first) _map.SavePng(Path.Combine(_opt.DemoOut!, name)); };
-        switch (i)
+        _report.Text = vm.Finished ? vm.ReportJson : "";
+        var running = _run is { Running: true } && !vm.Finished;
+        _startBtn.IsEnabled = _inst is not null && !running;
+        _pauseBtn.IsEnabled = _resumeBtn.IsEnabled = _cancelBtn.IsEnabled = running;
+        _ckBtn.IsEnabled = running && (_runSettings.CheckpointDir.Length > 0);
+        if (_inst is { } i)
         {
-            case 0: _map.Fit(); break;
-            case 1: shot("map_fit.png"); break;
-            case < 100: _map.ZoomAt(1.06, cx, cy); break;
-            case 100: shot("map_zoomed.png"); break;
-            case < 160: _map.PanBy(8, 4); break;
-            case < 250: _map.ZoomAt(1 / 1.06, cx, cy); break;
-            case 250: _map.Renderer.Force = LodLevel.Clusters; _map.Fit(); break;
-            case 252: shot("map_clusters.png"); break;
-            case 260: _map.Renderer.Force = LodLevel.Heatmap; _map.Invalidate(); break;
-            case 262: shot("map_heatmap.png"); break;
-            case 270: _map.Renderer.Force = null; _map.Invalidate(); break;
-            default: _map.PanBy(i % 2 == 0 ? 3 : -3, 0); break;
+            _instTitle.Text = i.Name;
+            var sc = _map.Scene;
+            _instDetails.Text = string.Create(CultureInfo.InvariantCulture,
+                $"{i.Dimension} nodes · {i.EdgeWeightType}\n{(sc is null ? "" : $"x {sc.MinX:0.##} .. {sc.MaxX:0.##}, y {sc.MinY:0.##} .. {sc.MaxY:0.##}\n")}{i.Comment}\n{i.Path}");
         }
-        if (first && _map.Scene.Clusters.Any(c => c.State != 0) && !File.Exists(Path.Combine(_opt.DemoOut!, "map_cluster_overlay.png")))
-            _map.SavePng(Path.Combine(_opt.DemoOut!, "map_cluster_overlay.png"));
+        else
+        {
+            _instTitle.Text = "No instance";
+            _instDetails.Text = "Open a .tsp (Ctrl+O) or drop one on the window.";
+        }
+        _statusBar.Text = $"{(_inst?.Name ?? "-")} · {vm.Status} · engine {(EngineLocator.Find(_settings.EnginePath) ?? "not found")} · history {_store.Home}";
+        _statusBar.Foreground = _pal.Brush(_pal.Muted);
     }
 
-    private void FinishDemo()
+    private void AddLogLine(string line)
     {
-        _demo?.Stop();
-        var dir = _opt.DemoOut!;
-        _map.Renderer.Force = null;
-        _map.Fit();
-        _map.SavePng(Path.Combine(dir, "map_final.png"));
-        var size = new PixelSize((int)Bounds.Width, (int)Bounds.Height);
-        using (var rtb = new RenderTargetBitmap(size, new Vector(96, 96)))
-        {
-            rtb.Render(this);
-            rtb.Save(Path.Combine(dir, "window_final.png"));
-        }
-        File.WriteAllText(Path.Combine(dir, "report.json"), _vm.ReportJson);
-        File.WriteAllText(Path.Combine(dir, "frame_stats.txt"), FrameStats.Describe(_map, _map.Scene!.Count));
-        Close();
+        var f = _logFilter.Text;
+        if (!string.IsNullOrEmpty(f) && !line.Contains(f, StringComparison.OrdinalIgnoreCase)) return;
+        _logItems.Add(line);
+        if (_logItems.Count > _vm.LogCapacity) _logItems.RemoveAt(0);
     }
 
-    private void Stop()
+    private void RefilterLog()
     {
-        _demo?.Stop();
-        try
-        {
-            if (_engine is { HasExited: false }) Send(MsgType.Shutdown);
-            _engine?.WaitForExit(5000);
-            if (_engine is { HasExited: false }) _engine.Kill();
-        }
-        catch (InvalidOperationException) { }
-        _client?.Dispose();
-        _tourReader?.Dispose();
+        _logItems.Clear();
+        foreach (var l in _vm.LogTail) AddLogLine(l);
     }
+
+    private void Toast(string text)
+    {
+        _vm.OnLog("[app] " + text);
+        _statusBar.Text = text;
+        _statusBar.Foreground = _pal.Brush(_pal.Text);
+        AppDemoLog(text);
+    }
+
+    private void SaveSettings()
+    {
+        try { _settings.Run = ReadForm(); _store.SaveSettings(_settings); }
+        catch (IOException) { }
+    }
+}
+
+// Minimal ICommand for key bindings.
+public sealed class RelayCommand(Action run) : System.Windows.Input.ICommand
+{
+    public event EventHandler? CanExecuteChanged { add { } remove { } }
+    public bool CanExecute(object? parameter) => true;
+    public void Execute(object? parameter) => run();
 }
 
 public static class FrameStats

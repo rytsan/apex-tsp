@@ -11,12 +11,26 @@ Avalonia 11 + SkiaSharp client of the engine IPC (Sprint 5, M5.3).
 dotnet test ApexTsp.Tests -c Release            # needs build/dev-gcc/apex_tsp (or APEX_BIN)
 dotnet publish ApexTsp.Gui -c Release -r linux-x64 -p:PublishAot=true -o aot   # SDK >= 10.0.403
 
-# launch the engine from the GUI (engine arguments after --)
-aot/ApexTsp.Gui --engine ../build/dev-gcc/apex_tsp --instance ../data/pla85900.tsp -- --mode scalable --time-limit 600 --threads 5
+aot/ApexTsp.Gui                                  # app: open an instance, configure, run
+aot/ApexTsp.Gui ../data/pr1002.tsp               # open an instance at start
+aot/ApexTsp.Gui ../data/pla85900.tsp --engine ../build/benchmark/apex_tsp
 # attach to a running engine started with --ipc <endpoint> --shared-tour <file>
 aot/ApexTsp.Gui --attach /tmp/apex.sock --shared-tour /tmp/apex.tour --instance ../data/pla85900.tsp
 ```
 
-Map: drag = pan, wheel = zoom, double click = fit. `--demo-out <dir>` runs a scripted pan/zoom
-sequence, saves screenshots, `frame_stats.txt` and the final report, then exits. Under WSL use
-`DISPLAY=:0`.
+App (Sprint 6 M6.2): toolbar Open (Ctrl+O, drag and drop, Recent), Start (F5), Pause (F6),
+Resume (F7), Cancel (Shift+F5), Checkpoint, Save tour (Ctrl+S, TSPLIB `.tour`), Export (map PNG,
+tour SVG, report JSON), theme (system / light / dark). Tabs: **Solve** (map, instance summary, run
+settings: mode, time limit, threads, seed, memory ceiling, checkpoint dir, resume; bounds, chart,
+final report), **Runs** (history of the instance or of all instances; double click reloads the
+tour, bounds and report), **Log**.
+
+Engine binary: `--engine`, else the last one used (settings), `$APEX_TSP_ENGINE`, next to the GUI,
+or the repo's `build/<preset>/apex_tsp`. Settings and history live in `$APEX_TSP_HOME` (default:
+the user's local app data folder, `apex-tsp/`): `settings.json` and
+`history/<instance>-<hash>/<run>/{run.json, report.json, tour.tour, engine.log}`.
+
+Map: drag = pan, wheel = zoom, double click = fit. Scripts (evidence): `--demo-out <dir> -- <engine
+args>` (G5.3: pan/zoom, LOD screenshots, `frame_stats.txt`), `--demo-app <dir> [-- <engine args>]`
+(G6.2: configure, run, pause / resume, save tour, reload from history, dark theme; `app_demo.log`
+with PASS/FAIL lines). Under WSL use `DISPLAY=:0`.

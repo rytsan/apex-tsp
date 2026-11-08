@@ -286,3 +286,107 @@ public class ViewModelTests
         Assert.True(vm.Finished);
     }
 }
+
+public class AppModelTests
+{
+    [Fact]
+    public void T_settings_to_engine_args()
+    {
+        var s = new RunSettings { Mode = "scalable", TimeLimitS = 90.5, Threads = 3, Seed = 42, MemLimitMb = 2048, CheckpointDir = "/tmp/ck", Resume = true };
+        var a = s.ToEngineArgs("x.tsp", "e.sock", "t.shm", "r.json", "o.tour");
+        string After(string flag) => a[a.IndexOf(flag) + 1];
+        Assert.Equal("scalable", After("--mode"));
+        Assert.Equal("90.5", After("--time-limit"));
+        Assert.Equal("3", After("--threads"));
+        Assert.Equal("42", After("--seed"));
+        Assert.Equal("2048", After("--mem-limit-mb"));
+        Assert.Equal("/tmp/ck", After("--checkpoint"));
+        Assert.Equal("e.sock", After("--ipc"));
+        Assert.Equal("r.json", After("--report"));
+        Assert.Equal("o.tour", After("--out"));
+        Assert.Contains("--resume", a);
+        Assert.DoesNotContain("--checkpoint", new RunSettings().ToEngineArgs("x", "e", "t", "r", "o"));
+        Assert.NotNull(new RunSettings { Resume = true }.Validate());
+        Assert.NotNull(new RunSettings { Threads = 0 }.Validate());
+        Assert.NotNull(new RunSettings { Mode = "fast" }.Validate());
+        Assert.Throws<ArgumentException>(() => new RunSettings { TimeLimitS = 0 }.ToEngineArgs("x", "e", "t", "r", "o"));
+    }
+
+    [Fact]
+    public void T_history_round_trip()
+    {
+        var home = Directory.CreateTempSubdirectory("apex_gui_home_");
+        try
+        {
+            var store = new AppStore(home.FullName);
+            var settings = store.LoadSettings();  // missing file: defaults
+            settings.Touch("/a.tsp");
+            settings.Touch("/b.tsp");
+            settings.Touch("/a.tsp");
+            settings.Theme = "dark";
+            settings.Run.Threads = 7;
+            store.SaveSettings(settings);
+            var back = store.LoadSettings();
+            Assert.Equal(["/a.tsp", "/b.tsp"], back.Recent);
+            Assert.Equal("dark", back.Theme);
+            Assert.Equal(7, back.Run.Threads);
+
+            var inst = Path.Combine(Repo.Root, "data", "a280.tsp");
+            var vm = new MainViewModel();
+            vm.OnTelemetry(new TelemetryPacket { MagicVersion = Protocol.TelemetryMagic, Seq = 1, TimestampUs = 1000, UpperBound = 2600, LowerBound = double.NaN });
+            vm.OnTelemetry(new TelemetryPacket { MagicVersion = Protocol.TelemetryMagic, Seq = 2, TimestampUs = 2000, UpperBound = 2579, LowerBound = 2579 });
+            vm.OnFinished("{\"instance\":\"a280\",\"mode\":\"exact\",\"status\":\"OPTIMAL_PROVEN\",\"ub\":2579,\"lb\":2579,\"lb_source\":\"lp\",\"gap_pct\":0,\"wall_s\":0.4}");
+            var first = store.NewRunDir(inst, out var id1);
+            var second = store.NewRunDir(inst, out var id2);
+            Assert.NotEqual(id1, id2);
+            AppStore.SaveRecord(first, vm.ToRecord(id1, inst, "a280", DateTimeOffset.Now.AddMinutes(-1), new RunSettings { Threads = 2 }));
+            AppStore.SaveRecord(second, vm.ToRecord(id2, inst, "a280", DateTimeOffset.Now, new RunSettings { Threads = 4 }));
+            var runs = store.ListRuns(inst);
+            Assert.Equal(2, runs.Count);
+            Assert.Equal(second, runs[0].Dir);  // newest first
+            var r = runs[0].Run;
+            Assert.Equal("OPTIMAL_PROVEN", r.Status);
+            Assert.Equal(2579, r.Ub);
+            Assert.Equal(0.4, r.WallS);
+            Assert.Equal("lp", r.LbSource);
+            Assert.Equal(4, r.Settings.Threads);
+            Assert.Equal(2, r.Bounds.Count);
+            Assert.True(double.IsNaN(r.Bounds[0].Lb));  // NaN survives JSON
+            Assert.Empty(store.ListRuns(Path.Combine(Repo.Root, "data", "eil51.tsp")));
+            Assert.Equal(2, store.ListRuns().Count);
+
+            var vm2 = new MainViewModel();
+            vm2.LoadRecord(r, "");
+            Assert.Equal(2579, vm2.UpperBound);
+            Assert.Equal(2, vm2.History.Count);
+            Assert.True(vm2.Finished);
+        }
+        finally { home.Delete(true); }
+    }
+
+    [Fact]
+    public void T_tour_file_round_trip_and_instance_info()
+    {
+        var dir = Directory.CreateTempSubdirectory("apex_gui_tour_");
+        try
+        {
+            var inst = InstanceInfo.Read(Path.Combine(Repo.Root, "data", "a280.tsp"));
+            Assert.Equal("a280", inst.Name);
+            Assert.Equal(280, inst.Dimension);
+            Assert.Equal("EUC_2D", inst.EdgeWeightType);
+            var opt = TourFiles.Read(Path.Combine(Repo.Root, "data", "a280.opt.tour"));
+            Assert.Equal(280, opt.Length);
+            Assert.Equal(280, opt.Distinct().Count());
+            var p = Path.Combine(dir.FullName, "t.tour");
+            TourFiles.Write(p, "a280", opt, "test");
+            Assert.Equal(opt, TourFiles.Read(p));
+            var scene = Scene.LoadTsplib(Path.Combine(Repo.Root, "data", "a280.tsp"));
+            var svg = Path.Combine(dir.FullName, "t.svg");
+            TourFiles.WriteSvg(svg, scene, opt);
+            var text = File.ReadAllText(svg);
+            Assert.StartsWith("<svg", text);
+            Assert.Equal(280, text.Split("points=\"")[1].Split('"')[0].Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
+        }
+        finally { dir.Delete(true); }
+    }
+}

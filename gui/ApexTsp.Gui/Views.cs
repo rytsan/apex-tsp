@@ -144,15 +144,14 @@ public sealed class MapView : Control
 public sealed class GapChart : Control
 {
     public IReadOnlyList<BoundSample> Samples { get; set; } = [];
-    private static readonly IPen UbPen = new Pen(new SolidColorBrush(Color.FromRgb(0x2B, 0x7B, 0xE4)), 1.5);
-    private static readonly IPen LbPen = new Pen(new SolidColorBrush(Color.FromRgb(0x2E, 0x9D, 0x4F)), 1.5);
-    private static readonly IBrush Back = new SolidColorBrush(Color.FromRgb(0xF6, 0xF7, 0xF9));
+    public Palette Pal { get; set; } = Palette.Light;
 
     public override void Render(DrawingContext ctx)
     {
         var w = Bounds.Width;
         var h = Bounds.Height;
-        ctx.FillRectangle(Back, new Rect(0, 0, w, h));
+        IPen UbPen = new Pen(new SolidColorBrush(Pal.Heuristic), 1.5), LbPen = new Pen(new SolidColorBrush(Pal.Lp), 1.5);
+        ctx.FillRectangle(new SolidColorBrush(Pal.Background), new Rect(0, 0, w, h));
         var s = Samples;
         if (s.Count < 2) return;
         double t0 = s[0].Seconds, t1 = Math.Max(s[^1].Seconds, t0 + 1e-9);
