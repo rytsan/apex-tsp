@@ -22,8 +22,8 @@ App (Sprint 6 M6.2): toolbar Open (Ctrl+O, drag and drop, Recent), Start (F5), P
 Resume (F7), Cancel (Shift+F5), Checkpoint, Save tour (Ctrl+S, TSPLIB `.tour`), Export (map PNG,
 tour SVG, report JSON), theme (system / light / dark). Tabs: **Solve** (map, instance summary, run
 settings: mode, time limit, threads, seed, memory ceiling, checkpoint dir, resume; bounds, chart,
-final report), **Runs** (history of the instance or of all instances; double click reloads the
-tour, bounds and report), **Log**.
+final report; below the map: bounds over time with event markers, cuts per round, live branch-and-cut tree; provenance badges and colors: orange heuristic, blue LP, purple Lagrangian, green proven; map layers tour / nodes / LP support / new LP edges / clusters), **Runs** (history of the instance or of all instances; double click reloads the
+tour, bounds and report), **Log** (colored by category: heuristic, LP, cuts, tree, system; text and category filters).
 
 Engine binary: `--engine`, else the last one used (settings), `$APEX_TSP_ENGINE`, next to the GUI,
 or the repo's `build/<preset>/apex_tsp`. Settings and history live in `$APEX_TSP_HOME` (default:

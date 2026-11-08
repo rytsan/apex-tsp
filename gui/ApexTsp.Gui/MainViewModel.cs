@@ -7,6 +7,30 @@ namespace ApexTsp.Gui;
 
 public readonly record struct BoundSample(double Seconds, double Ub, double Lb, double GapPct);
 
+public readonly record struct CutRow(double Seconds, uint Round, double Lp, uint Sec, uint Blossom, uint Component, uint Pool, uint Rows, uint Iterations)
+{
+    public uint Found => Sec + Blossom + Component;
+}
+
+public enum LogCategory { Heuristic, Lp, Cuts, Tree, System }
+
+public sealed record LogLine(string Text, LogCategory Category)
+{
+    public static LogCategory Classify(string line)
+    {
+        var name = line.Split(' ', 2)[0];
+        if (line.Contains("heuristic=true", StringComparison.Ordinal)) return LogCategory.Heuristic;
+        return name switch
+        {
+            "construct" or "two_opt" or "polish" or "ils" or "lk" or "decomposition" or "ub_improved" => LogCategory.Heuristic,
+            "cut_round" or "pool" or "separation" => LogCategory.Cuts,
+            "pricing" or "root_done" or "lp" or "held_karp" or "root_lp" => LogCategory.Lp,
+            "bnc_start" or "tree_progress" or "rcf_root" or "FINISHED" or "branch" or "checkpoint" => LogCategory.Tree,
+            _ => LogCategory.System,
+        };
+    }
+}
+
 // Engine state for the panels. Plain C# (no Avalonia types): fed from the IPC client, read by
 // the views; T_vm_gap_chart_updates drives it with a synthetic stream. Call from one thread.
 public sealed class MainViewModel : INotifyPropertyChanged
@@ -41,6 +65,68 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public string ReportJson { get; private set; } = "";
     public bool Finished { get; private set; }
     public List<string> LogTail { get; } = [];
+
+    // ---- solver view (protocol v3, M6.3) ----
+    public event Action? SolverChanged;
+    public List<SolverEvent> Events { get; } = [];
+    public List<CutRow> CutRounds { get; } = [];
+    public Dictionary<uint, TreeNodePacket> Tree { get; } = [];
+    public string UbSource { get; private set; } = "-";      // construct, two_opt, polish, ils, dive, lp_integral, ...
+    public bool UbHeuristic { get; private set; } = true;
+    public string LbOrigin { get; private set; } = "-";      // lp | lagrangian
+    public string CutState { get; private set; } = "-";      // separating | no violated cuts | tailing off
+    public bool Proven { get; private set; }
+    public ulong TotalSec { get; private set; }
+    public ulong TotalBlossom { get; private set; }
+    public ulong TotalComponent { get; private set; }
+    public int TreeOpen => Tree.Values.Count(n => (TreeNodeState)n.State is TreeNodeState.Open or TreeNodeState.Reopened);
+
+    public void OnSolverEvent(SolverEvent e)
+    {
+        Events.Add(e);
+        if (Events.Count > 20000) Events.RemoveRange(0, Events.Count - 20000);
+        switch (e.Kind)
+        {
+            case EventKind.UbImproved: UbSource = e.Detail; UbHeuristic = e.Heuristic; break;
+            case EventKind.LbImproved: LbOrigin = e.Detail; break;
+            case EventKind.NoViolatedCuts: CutState = "no violated cuts"; break;
+            case EventKind.TailingOff: CutState = "tailing off"; break;
+            case EventKind.Proven: Proven = true; break;
+        }
+        SolverChanged?.Invoke();
+    }
+
+    public void OnCutRound(in CutRoundPacket c)
+    {
+        CutRounds.Add(new CutRow(c.TimestampUs / 1e6, c.Round, c.LpValue, c.Sec, c.Blossom, c.Component, c.Pool, c.Rows, c.LpIterations));
+        if (CutRounds.Count > 5000) CutRounds.RemoveRange(0, CutRounds.Count - 5000);
+        TotalSec += c.Sec;
+        TotalBlossom += c.Blossom;
+        TotalComponent += c.Component;
+        if (c.Sec + c.Blossom + c.Component + c.Pool > 0) CutState = "separating";
+        SolverChanged?.Invoke();
+    }
+
+    public void OnTreeNode(in TreeNodePacket n)
+    {
+        Tree[n.Id] = n;
+        SolverChanged?.Invoke();
+    }
+
+    // Provenance badges: (text, source key for the palette).
+    public (string Text, string Source) UbBadge => double.IsNaN(UpperBound) ? ("NO TOUR YET", "-")
+        : UbHeuristic ? ($"UB · HEURISTIC ({UbSource})", "heuristic") : ($"UB · LP ({UbSource})", "lp");
+
+    public (string Text, string Source) LbBadge
+    {
+        get
+        {
+            if (Proven || Status == "OPTIMAL_PROVEN") return ("OPTIMAL PROVEN", "proven");
+            var src = LbOrigin != "-" ? LbOrigin : LbSource;
+            return double.IsNaN(LowerBound) ? ("NO BOUND YET", "-")
+                : src == "lagrangian" ? ("LB · LAGRANGIAN BOUND", "lagrangian") : ("LB · LP BOUND", "lp");
+        }
+    }
 
     public void OnTelemetry(in TelemetryPacket p)
     {
@@ -131,8 +217,16 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ReportJson = "";
         Finished = false;
         LogTail.Clear();
+        Events.Clear();
+        CutRounds.Clear();
+        Tree.Clear();
+        UbSource = LbOrigin = CutState = "-";
+        UbHeuristic = true;
+        Proven = false;
+        TotalSec = TotalBlossom = TotalComponent = 0;
         Changed();
         HistoryChanged?.Invoke();
+        SolverChanged?.Invoke();
     }
 
     // Stored run -> panels (history tab).

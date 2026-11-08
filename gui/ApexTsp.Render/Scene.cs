@@ -16,6 +16,26 @@ public sealed class Scene
     public uint[] Tour { get; private set; } = [];
     public int TourCount { get; private set; }
     public IReadOnlyList<ClusterBox> Clusters => _clusters;
+
+    // Current LP support (exact mode, M6.3): edges with x > 0; New marks edges absent from the
+    // previous LP (flashed briefly so the change between rounds is visible).
+    public LpSegment[] Lp { get; private set; } = [];
+    public bool[] LpNew { get; private set; } = [];
+    public bool LpFlash { get; set; }
+    public int LpVersion { get; private set; }
+
+    public void SetLp(LpSegment[] lp)
+    {
+        var prev = new HashSet<ulong>(Lp.Length);
+        foreach (var e in Lp) prev.Add(Key(e.U, e.V));
+        var fresh = new bool[lp.Length];
+        for (var i = 0; i < lp.Length; ++i) fresh[i] = Lp.Length > 0 && !prev.Contains(Key(lp[i].U, lp[i].V));
+        Lp = lp;
+        LpNew = fresh;
+        ++LpVersion;
+    }
+
+    private static ulong Key(uint a, uint b) => a < b ? (ulong)a << 32 | b : (ulong)b << 32 | a;
     private readonly List<ClusterBox> _clusters = [];
 
     public Scene(float[] x, float[] y)
@@ -77,6 +97,8 @@ public sealed class Scene
         return new Scene(xs.ToArray(), ys.ToArray());
     }
 }
+
+public readonly record struct LpSegment(uint U, uint V, float X);
 
 public sealed class ClusterBox
 {

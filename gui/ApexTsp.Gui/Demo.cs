@@ -12,6 +12,7 @@ public sealed partial class MainWindow
 {
     private DispatcherTimer? _demo;
     private int _demoStep;
+    private bool _liveShot;
 
     // ---- G5.3: pan/zoom cycles through the input path, LOD levels, screenshots, frame stats.
     private void StartDemo()
@@ -44,6 +45,13 @@ public sealed partial class MainWindow
             case 270: _map.Renderer.Force = null; _map.Invalidate(); break;
             default: _map.PanBy(i % 2 == 0 ? 3 : -3, 0); break;
         }
+        if (!_liveShot && _vm.Tree.Count >= 10 && LpFrames > 0 && _vm.CutRounds.Count > 0)
+        {
+            _liveShot = true;
+            _map.Fit();
+            RefreshSolverViews();
+            DispatcherTimer.RunOnce(() => { SaveWindowPng(Path.Combine(_opt.DemoOut!, "window_live.png")); _map.SavePng(Path.Combine(_opt.DemoOut!, "map_live_lp.png")); }, TimeSpan.FromMilliseconds(150));
+        }
         if (first && scene.Clusters.Any(c => c.State != 0) && !File.Exists(Path.Combine(_opt.DemoOut!, "map_cluster_overlay.png")))
             _map.SavePng(Path.Combine(_opt.DemoOut!, "map_cluster_overlay.png"));
     }
@@ -58,7 +66,12 @@ public sealed partial class MainWindow
         SaveWindowPng(Path.Combine(dir, "window_final.png"));
         File.WriteAllText(Path.Combine(dir, "report.json"), _vm.ReportJson);
         if (_run is not null && File.Exists(_run.LogPath)) File.Copy(_run.LogPath, Path.Combine(dir, "engine.log"), true);
-        File.WriteAllText(Path.Combine(dir, "frame_stats.txt"), FrameStats.Describe(_map, _map.Scene!.Count));
+        var r = _map.Renderer;
+        File.WriteAllText(Path.Combine(dir, "frame_stats.txt"), FrameStats.Describe(_map, _map.Scene!.Count) +
+            $"layers: tour={r.ShowTour} nodes={r.ShowNodes} lp={r.ShowLp} clusters={r.ClusterOverlay} flash={_flashLp.IsChecked}\n" +
+            $"solver view: lp_solutions={LpFrames} lp_edges_last={_map.Scene.Lp.Length} cut_rounds={_vm.CutRounds.Count} tree_nodes={_vm.Tree.Count} events={_vm.Events.Count}\n" +
+            $"events by kind: {string.Join(", ", _vm.Events.GroupBy(e => e.Kind).OrderBy(g => g.Key).Select(g => $"{g.Key}={g.Count()}"))}\n" +
+            $"badges: {_vm.UbBadge.Text} | {_vm.LbBadge.Text} | cuts {_vm.CutState}\n");
         Close();
     }
 

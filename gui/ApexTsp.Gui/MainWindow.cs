@@ -24,7 +24,21 @@ public sealed partial class MainWindow : Window
     private readonly AppSettings _settings;
     private readonly MainViewModel _vm = new();
     private readonly MapView _map = new();
-    private readonly GapChart _chart = new() { Height = 170 };
+    private readonly BoundsChart _chart = new();
+    private readonly CutsChart _cuts = new();
+    private readonly TreePanel _tree = new();
+    private readonly TextBlock _cutText = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11 };
+    private readonly TextBlock _treeText = new() { TextWrapping = TextWrapping.Wrap, FontSize = 11 };
+    private readonly Border _cutBadge = new() { CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 2) };
+    private readonly TextBlock _cutBadgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.SemiBold, FontSize = 11 };
+    private readonly Border _ubBadge = new() { CornerRadius = new CornerRadius(10), Padding = new Thickness(8, 2) };
+    private readonly TextBlock _ubBadgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.SemiBold, FontSize = 11 };
+    private readonly CheckBox _showTour = new() { Content = "tour", IsChecked = true }, _showNodes = new() { Content = "nodes", IsChecked = true },
+        _showLp = new() { Content = "LP support", IsChecked = true }, _flashLp = new() { Content = "flash new LP edges", IsChecked = true },
+        _logGap = new() { Content = "log gap", IsChecked = true };
+    private readonly ComboBox _logCat = new() { ItemsSource = new[] { "all", "heuristic", "lp", "cuts", "tree", "system" }, SelectedIndex = 0, MinWidth = 110 };
+    private bool _solverDirty;
+    private IDisposable? _flashOff;
     private Palette _pal = Palette.Light;
 
     // Solve tab: instance card
@@ -45,7 +59,7 @@ public sealed partial class MainWindow : Window
     private readonly TextBlock _badgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.SemiBold, FontSize = 11 };
     private readonly ProgressBar _ram = new() { Minimum = 0, Maximum = 1, Height = 6 };
     private readonly TextBox _report = new() { IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, Height = 180, FontFamily = new FontFamily("monospace"), FontSize = 11 };
-    private readonly CheckBox _overlay = new() { Content = "cluster heatmap overlay", IsChecked = true };
+    private readonly CheckBox _overlay = new() { Content = "clusters", IsChecked = true };
     // toolbar
     private readonly Button _startBtn = new(), _pauseBtn = new(), _resumeBtn = new(), _cancelBtn = new(), _ckBtn = new();
     private readonly Button _recentBtn = new() { Content = "Recent ▾" };
@@ -57,7 +71,7 @@ public sealed partial class MainWindow : Window
     private readonly CheckBox _allRuns = new() { Content = "all instances" };
     private readonly ListBox _log = new() { FontFamily = new FontFamily("monospace"), FontSize = 11 };
     private readonly TextBox _logFilter = new() { Watermark = "filter", MinWidth = 220 };
-    private readonly System.Collections.ObjectModel.ObservableCollection<string> _logItems = [];
+    private readonly System.Collections.ObjectModel.ObservableCollection<LogLine> _logItems = [];
     private readonly TabControl _tabs = new();
 
     private InstanceInfo? _inst;
@@ -78,7 +92,12 @@ public sealed partial class MainWindow : Window
         MinWidth = 900;
         MinHeight = 600;
         _badge.Child = _badgeText;
+        _ubBadge.Child = _ubBadgeText;
+        _cutBadge.Child = _cutBadgeText;
         _log.ItemsSource = _logItems;
+        _log.ItemTemplate = new Avalonia.Controls.Templates.FuncDataTemplate<LogLine>((l, _) =>
+            new TextBlock { Text = l.Text, Foreground = _pal.Brush(CategoryColor(l.Category)), FontFamily = new FontFamily("monospace"), FontSize = 11 });
+        _tree.NodeClicked += n => _treeText.Text = TreePanel.Describe(n);
 
         Content = BuildLayout();
         LoadSettingsIntoForm(_settings.Run);
@@ -88,7 +107,16 @@ public sealed partial class MainWindow : Window
         ApplyPalette();
 
         _vm.PropertyChanged += (_, _) => UpdatePanels();
-        _vm.HistoryChanged += () => { _chart.Samples = _vm.History.ToArray(); _chart.InvalidateVisual(); };
+        _vm.HistoryChanged += () => _solverDirty = true;
+        _vm.SolverChanged += () => _solverDirty = true;
+        // Charts redraw at most 10 times per second however fast events arrive.
+        new DispatcherTimer(TimeSpan.FromMilliseconds(100), DispatcherPriority.Background, (_, _) => RefreshSolverViews()).Start();
+        void Layer(CheckBox c, Action<bool> set) => c.IsCheckedChanged += (_, _) => { set(c.IsChecked == true); _map.Invalidate(); };
+        Layer(_showTour, v => _map.Renderer.ShowTour = v);
+        Layer(_showNodes, v => _map.Renderer.ShowNodes = v);
+        Layer(_showLp, v => _map.Renderer.ShowLp = v);
+        _logGap.IsCheckedChanged += (_, _) => { _chart.LogGap = _logGap.IsChecked == true; _chart.InvalidateVisual(); };
+        _logCat.SelectionChanged += (_, _) => RefilterLog();
         _vm.ClusterBox += (id, x0, y0, x1, y1) => _map.Scene?.SetCluster(id, x0, y0, x1, y1);
         _vm.LogAdded += AddLogLine;
         _overlay.IsCheckedChanged += (_, _) => { _map.Renderer.ClusterOverlay = _overlay.IsChecked == true; _map.Invalidate(); };
@@ -172,20 +200,43 @@ public sealed partial class MainWindow : Window
         side.Children.AddRange([
             Card("Instance", new StackPanel { Spacing = 4, Children = { _instTitle, _instDetails } }),
             Card("Run settings", new StackPanel { Spacing = 6, Children = { form, _settingsError } }),
-            Card("Bounds", new StackPanel
+            Card("Solver", new StackPanel
             {
                 Spacing = 6,
                 Children =
                 {
-                    new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { _badge, _phase } },
-                    _bounds, _chart, _stats, _status,
-                    new TextBlock { Text = "RAM vs ceiling", Opacity = 0.7 }, _ram, _ramText, _overlay,
+                    new WrapPanel { Children = { _ubBadge, new Border { Width = 6 }, _badge } },
+                    _bounds, _phase, _stats, _status,
+                    new TextBlock { Text = "RAM vs ceiling", Opacity = 0.7 }, _ram, _ramText,
                 },
             }),
+            Card("Map layers", LayerPanel()),
             Card("Final report", _report),
         ]);
+        Grid Fill(Control c) { var g = new Grid(); g.Children.Add(c); return g; }
+        var cutsBody = new DockPanel();
+        var cutsTop = new StackPanel { Spacing = 4, Children = { _cutBadge, _cutText } };
+        DockPanel.SetDock(cutsTop, Dock.Top);
+        cutsBody.Children.AddRange([cutsTop, _cuts]);
+        var treeBody = new DockPanel();
+        DockPanel.SetDock(_treeText, Dock.Bottom);
+        treeBody.Children.AddRange([_treeText, _tree]);
+        var chartBody = new DockPanel();
+        DockPanel.SetDock(_logGap, Dock.Top);
+        chartBody.Children.AddRange([_logGap, _chart]);
+        var strip = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*,*"), ColumnSpacing = 10, Margin = new Thickness(0, 10, 0, 0) };
+        var c0 = Card("Bounds over time", chartBody, fill: true);
+        var c1 = Card("Cuts", cutsBody, fill: true);
+        var c2 = Card("Branch-and-cut tree", treeBody, fill: true);
+        Grid.SetColumn(c1, 1);
+        Grid.SetColumn(c2, 2);
+        strip.Children.AddRange([c0, c1, c2]);
+        var leftCol = new Grid { RowDefinitions = new RowDefinitions("*,300"), Margin = new Thickness(12, 0, 0, 12) };
+        leftCol.Children.Add(Fill(new Border { Child = _map, ClipToBounds = true, CornerRadius = new CornerRadius(8) }));
+        Grid.SetRow(strip, 1);
+        leftCol.Children.Add(strip);
         var solve = new Grid { ColumnDefinitions = new ColumnDefinitions("*,400") };
-        solve.Children.Add(new Border { Child = _map, ClipToBounds = true });
+        solve.Children.Add(leftCol);
         var scroll = new ScrollViewer { Content = side };
         Grid.SetColumn(scroll, 1);
         solve.Children.Add(scroll);
@@ -208,7 +259,7 @@ public sealed partial class MainWindow : Window
 
         // Log tab
         var logPanel = new DockPanel { Margin = new Thickness(12) };
-        var logTop = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 8), Children = { _logFilter } };
+        var logTop = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 0, 8), Children = { _logFilter, _logCat } };
         DockPanel.SetDock(logTop, Dock.Top);
         logPanel.Children.AddRange([logTop, _log]);
 
@@ -228,18 +279,38 @@ public sealed partial class MainWindow : Window
 
     private readonly List<Border> _cards = [];
 
-    private Border Card(string title, Control body)
+    private WrapPanel LayerPanel()
     {
+        var p = new WrapPanel();
+        foreach (var c in new[] { _showTour, _showNodes, _showLp, _flashLp, _overlay })
+        {
+            c.Margin = new Thickness(0, 0, 14, 4);
+            p.Children.Add(c);
+        }
+        var legend = new TextBlock { FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
+        legend.Text = "tour: orange = heuristic, blue = LP, green = proven · LP: blue x = 1, red 0 < x < 1 (width and opacity by x), yellow = new since the last LP";
+        p.Children.Add(legend);
+        return p;
+    }
+
+    private Border Card(string title, Control body, bool fill = false)
+    {
+        var head = new TextBlock { Text = title.ToUpperInvariant(), FontSize = 11, FontWeight = FontWeight.SemiBold, Opacity = 0.65, Margin = new Thickness(0, 0, 0, 8) };
+        Control content;
+        if (fill)
+        {
+            var d = new DockPanel();
+            DockPanel.SetDock(head, Dock.Top);
+            d.Children.AddRange([head, body]);
+            content = d;
+        }
+        else content = new StackPanel { Children = { head, body } };
         var b = new Border
         {
             CornerRadius = new CornerRadius(8),
             Padding = new Thickness(12),
             BorderThickness = new Thickness(1),
-            Child = new StackPanel
-            {
-                Spacing = 8,
-                Children = { new TextBlock { Text = title.ToUpperInvariant(), FontSize = 11, FontWeight = FontWeight.SemiBold, Opacity = 0.65 }, body },
-            },
+            Child = content,
         };
         _cards.Add(b);
         return b;
@@ -267,8 +338,13 @@ public sealed partial class MainWindow : Window
         _map.Renderer.Background = Palette.Sk(_pal.Surface);
         _map.Renderer.NodeColor = Palette.Sk(_pal.MapNode);
         _map.Renderer.TourColor = Palette.Sk(_pal.MapTour);
-        _chart.Pal = _pal;
-        _chart.InvalidateVisual();
+        _chart.Pal = _cuts.Pal = _tree.Pal = _pal;
+        _map.Renderer.LpIntegralColor = Palette.Sk(_pal.Lp);
+        _map.Renderer.LpFractionalColor = Palette.Sk(_pal.Danger);
+        _map.Renderer.LpNewColor = Palette.Sk(Color.Parse("#F9AB00"));
+        _solverDirty = true;
+        RefreshSolverViews();
+        RefilterLog();
         _map.Invalidate();
         UpdatePanels();
     }
@@ -446,6 +522,15 @@ public sealed partial class MainWindow : Window
             c.TourUpdate += (_, _) => ReadTour(s);
             c.Finished += j => Dispatcher.UIThread.Post(() => OnFinished(s, j));
             c.Closed += r => Dispatcher.UIThread.Post(() => _vm.OnClosed(r));
+            c.SolverEvent += e => Dispatcher.UIThread.Post(() => _vm.OnSolverEvent(e));
+            c.CutRound += r => Dispatcher.UIThread.Post(() => _vm.OnCutRound(r));
+            c.TreeNode += n => Dispatcher.UIThread.Post(() => _vm.OnTreeNode(n));
+            c.LpSolution += (_, e) =>
+            {
+                var seg = new LpSegment[e.Length];
+                for (var i = 0; i < e.Length; ++i) seg[i] = new LpSegment(e[i].U, e[i].V, e[i].X);
+                Dispatcher.UIThread.Post(() => OnLp(s, seg));
+            };
             Dispatcher.UIThread.Post(() =>
             {
                 _vm.RamCeilingBytes = (ulong)c.EngineHello.MemLimitMb << 20;
@@ -456,6 +541,58 @@ public sealed partial class MainWindow : Window
         s.Acked += t => Dispatcher.UIThread.Post(() => _vm.OnAck(t));
         s.Failed += why => Dispatcher.UIThread.Post(() => _vm.OnClosed(why));
     }
+
+    private void OnLp(RunSession s, LpSegment[] seg)
+    {
+        if (_run != s || _map.Scene is null) return;
+        _map.Scene.SetLp(seg);
+        _map.Scene.LpFlash = _flashLp.IsChecked == true;
+        _map.Invalidate();
+        _flashOff?.Dispose();
+        _flashOff = DispatcherTimer.RunOnce(() => { if (_map.Scene is { } sc) { sc.LpFlash = false; _map.Invalidate(); } }, TimeSpan.FromMilliseconds(600));
+        ++LpFrames;
+    }
+
+    public int LpFrames { get; private set; }
+
+    private void RefreshSolverViews()
+    {
+        if (!_solverDirty) return;
+        _solverDirty = false;
+        _chart.Samples = _vm.History.ToArray();
+        _chart.Events = _vm.Events.ToArray();
+        _chart.InvalidateVisual();
+        _cuts.Rounds = _vm.CutRounds.ToArray();
+        _cuts.InvalidateVisual();
+        _tree.Nodes = new Dictionary<uint, TreeNodePacket>(_vm.Tree);
+        _tree.InvalidateVisual();
+        var vm = _vm;
+        var last = vm.CutRounds.Count > 0 ? vm.CutRounds[^1] : default;
+        (string text, Color col) = vm.CutState switch
+        {
+            "separating" => ("CUTS FOUND", CutsChart.Sec),
+            "no violated cuts" => ("NO VIOLATED CUTS", _pal.Danger),
+            "tailing off" => ("TAILING OFF", _pal.Heuristic),
+            _ => ("NO SEPARATION YET", _pal.Muted),
+        };
+        _cutBadgeText.Text = text;
+        _cutBadge.Background = _pal.Brush(col);
+        _cutText.Text = vm.CutRounds.Count == 0 ? "" : string.Create(CultureInfo.InvariantCulture,
+            $"round {last.Round}: SEC {last.Sec}, blossom {last.Blossom}, component {last.Component}, pool {last.Pool} · LP {Draw.Num(last.Lp)} · rows {last.Rows}\ntotal SEC {vm.TotalSec} · blossom {vm.TotalBlossom} · component {vm.TotalComponent} · {vm.CutRounds.Count} rounds");
+        var tour = vm.Proven || vm.Status == "OPTIMAL_PROVEN" ? _pal.Proven : vm.UbHeuristic ? _pal.Heuristic : _pal.Lp;
+        var sk = Palette.Sk(tour);
+        if (_map.Renderer.TourColor != sk) { _map.Renderer.TourColor = sk; _map.Invalidate(); }
+        UpdatePanels();
+    }
+
+    private Color CategoryColor(LogCategory c) => c switch
+    {
+        LogCategory.Heuristic => _pal.Heuristic,
+        LogCategory.Lp => _pal.Lp,
+        LogCategory.Cuts => CutsChart.Sec,
+        LogCategory.Tree => _pal.Lagrangian,
+        _ => _pal.Muted,
+    };
 
     private void ReadTour(RunSession s)
     {
@@ -607,13 +744,16 @@ public sealed partial class MainWindow : Window
     private void UpdatePanels()
     {
         var vm = _vm;
-        var src = vm.Status == "OPTIMAL_PROVEN" ? "proven" : vm.LbSource;
-        _badgeText.Text = src switch { "lp" => "LB: LP", "lagrangian" => "LB: LAGRANGIAN", "proven" => "OPTIMAL PROVEN", _ => "NO BOUND YET" };
-        _badge.Background = _pal.Brush(_pal.ForSource(src));
+        var (lbText, lbSrc) = vm.Status == "CANCELLED" && !vm.Proven ? ("CANCELLED · " + vm.LbBadge.Text, vm.LbBadge.Source) : vm.LbBadge;
+        _badgeText.Text = lbText;
+        _badge.Background = _pal.Brush(_pal.ForSource(lbSrc));
+        var (ubText, ubSrc) = vm.UbBadge;
+        _ubBadgeText.Text = ubText;
+        _ubBadge.Background = _pal.Brush(ubSrc == "heuristic" ? _pal.Heuristic : _pal.ForSource(ubSrc));
         _phase.Text = $"{vm.Mode} · phase {vm.Phase}";
         _bounds.Text = $"UB {MainViewModel.Fmt(vm.UpperBound)}   LB {MainViewModel.Fmt(vm.LowerBound)}   gap {MainViewModel.Fmt(vm.GapPct)}%";
         var it = vm.IterPerSec.ToString("0", CultureInfo.InvariantCulture);
-        _stats.Text = $"cut pool {vm.CutPoolSize}   open nodes {vm.OpenNodes}   simplex it/s {it}";
+        _stats.Text = $"cut pool {vm.CutPoolSize}   open nodes {vm.OpenNodes}   tree {vm.Tree.Count}   simplex it/s {it}";
         _ram.Value = vm.RamFraction;
         _ramText.Text = $"{vm.RamBytes >> 20} MB / {vm.RamCeilingBytes >> 20} MB";
         _status.Text = "status: " + vm.Status;
@@ -642,7 +782,9 @@ public sealed partial class MainWindow : Window
     {
         var f = _logFilter.Text;
         if (!string.IsNullOrEmpty(f) && !line.Contains(f, StringComparison.OrdinalIgnoreCase)) return;
-        _logItems.Add(line);
+        var cat = LogLine.Classify(line);
+        if (_logCat.SelectedIndex > 0 && (int)cat != _logCat.SelectedIndex - 1) return;
+        _logItems.Add(new LogLine(line, cat));
         if (_logItems.Count > _vm.LogCapacity) _logItems.RemoveAt(0);
     }
 

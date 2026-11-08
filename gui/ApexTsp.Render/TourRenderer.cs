@@ -24,6 +24,14 @@ public sealed class TourRenderer
     public SKColor Background { get; set; } = SKColors.White;
     public SKColor TourColor { get => _tourPaint.Color; set => _tourPaint.Color = value; }
     public SKColor NodeColor { get => _nodePaint.Color; set => _nodePaint.Color = value; }
+    // Layers (M6.3).
+    public bool ShowTour { get; set; } = true;
+    public bool ShowNodes { get; set; } = true;
+    public bool ShowLp { get; set; } = true;
+    public SKColor LpIntegralColor { get; set; } = new(0x1A, 0x73, 0xE8);
+    public SKColor LpFractionalColor { get; set; } = new(0xD9, 0x30, 0x25);
+    public SKColor LpNewColor { get; set; } = new(0xF9, 0xAB, 0x00);
+    private readonly SKPaint _lpPaint = new() { Style = SKPaintStyle.Stroke, IsAntialias = true, StrokeCap = SKStrokeCap.Round };
 
     private float[] _sx = [], _sy = [];
     private bool[] _vis = [];
@@ -65,15 +73,21 @@ public sealed class TourRenderer
         switch (level)
         {
             case LodLevel.Raw:
-                segments = DrawTour(canvas, s, 1, W, H);
-                for (var i = 0; i < n; ++i)
-                    if (_vis[i]) _pts[points++] = new SKPoint(_sx[i], _sy[i]);
-                canvas.DrawPoints(SKPointMode.Points, _pts.AsSpan(0, points).ToArray(), _nodePaint);
+                if (ShowTour) segments = DrawTour(canvas, s, 1, W, H);
+                if (ShowLp) segments += DrawLp(canvas, s, W, H, fractionalOnly: false);
+                if (ShowNodes)
+                {
+                    for (var i = 0; i < n; ++i)
+                        if (_vis[i]) _pts[points++] = new SKPoint(_sx[i], _sy[i]);
+                    canvas.DrawPoints(SKPointMode.Points, _pts.AsSpan(0, points).ToArray(), _nodePaint);
+                }
                 break;
             case LodLevel.Decimated:
             {
                 var k = (int)Math.Ceiling((double)visible / RawLimit);
-                segments = DrawTour(canvas, s, k, W, H);
+                if (ShowTour) segments = DrawTour(canvas, s, k, W, H);
+                if (ShowLp) segments += DrawLp(canvas, s, W, H, fractionalOnly: true);
+                if (!ShowNodes) break;
                 var occ = Cells(W * H);
                 for (var i = 0; i < n; ++i)
                 {
@@ -95,6 +109,46 @@ public sealed class TourRenderer
         if (ClusterOverlay) DrawClusterBoxes(canvas, s, v);
         canvas.Flush();
         return new RenderStats(level, visible, points, segments, sw.Elapsed.TotalMilliseconds);
+    }
+
+    // LP support: x = 1 hairline in the integral color; 0 < x < 1 in four buckets (opacity, and
+    // width while few, grow with x); edges new since the previous LP drawn on top while LpFlash is
+    // set. Wide and antialiased strokes only while the visible count stays small (frame budget).
+    public int LpDetailLimit { get; set; } = 3000;
+    private readonly List<SKPoint>[] _lpBuckets = [.. Enumerable.Range(0, 6).Select(_ => new List<SKPoint>())];
+
+    private int DrawLp(SKCanvas canvas, Scene s, int W, int H, bool fractionalOnly)
+    {
+        var lp = s.Lp;
+        if (lp.Length == 0) return 0;
+        // buckets: 0 = x = 1, 1..4 = fractional by x quarter, 5 = new since the previous LP
+        foreach (var l in _lpBuckets) l.Clear();
+        for (var i = 0; i < lp.Length; ++i)
+        {
+            var e = lp[i];
+            if (e.U >= s.Count || e.V >= s.Count || !SegmentVisible(e.U, e.V, W, H)) continue;
+            var integral = e.X >= 0.999f;
+            var isNew = s.LpFlash && i < s.LpNew.Length && s.LpNew[i];
+            if (integral && fractionalOnly && !isNew) continue;
+            var b = isNew ? 5 : integral ? 0 : 1 + Math.Clamp((int)(e.X * 4), 0, 3);
+            _lpBuckets[b].Add(new SKPoint(_sx[e.U], _sy[e.U]));
+            _lpBuckets[b].Add(new SKPoint(_sx[e.V], _sy[e.V]));
+        }
+        var frac = _lpBuckets[1].Count + _lpBuckets[2].Count + _lpBuckets[3].Count + _lpBuckets[4].Count;
+        void Stroke(int b, SKColor c, float wide, int count)
+        {
+            var pts = _lpBuckets[b];
+            if (pts.Count == 0) return;
+            var detail = count / 2 <= LpDetailLimit;
+            _lpPaint.IsAntialias = detail;
+            _lpPaint.StrokeWidth = detail ? wide : 0;
+            _lpPaint.Color = c;
+            canvas.DrawPoints(SKPointMode.Lines, [.. pts], _lpPaint);
+        }
+        Stroke(0, LpIntegralColor, 1.2f, _lpBuckets[0].Count);
+        for (var q = 0; q < 4; ++q) Stroke(1 + q, LpFractionalColor.WithAlpha((byte)(110 + 45 * q)), 1.2f + q * 0.7f, frac);
+        Stroke(5, LpNewColor, 3f, _lpBuckets[5].Count);
+        return _lpBuckets.Sum(l => l.Count) / 2;
     }
 
     private int[] Cells(int size)

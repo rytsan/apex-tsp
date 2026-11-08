@@ -236,11 +236,82 @@ public class RenderTests(ITestOutputHelper output)
         output.WriteLine("levels: " + string.Join(", ", levels.OrderBy(k => k.Key).Select(k => $"{k.Key}={k.Value}")));
         Assert.True(levels.ContainsKey(LodLevel.Raw) && levels.ContainsKey(LodLevel.Decimated));
         Assert.True(FrameStats.Percentile(ms, 0.95) <= 16, "p95 render time above 16 ms");
+
+        // LP overlay at the largest exact-mode scale (usa13509 / d18512 class: 20000 nodes): tour
+        // edges at x = 1, a short fractional edge per 10 nodes, then a second LP with 10% new edges
+        // (flashed), every layer on. LP edges are candidate-graph edges, so short.
+        const int m = 20_000;
+        var ls = Synthetic(m, 9);
+        var t = ls.Tour;
+        var pos = new int[m];
+        for (var i = 0; i < m; ++i) pos[t[i]] = i;
+        var lp = new List<LpSegment>();
+        for (var i = 0; i < m; ++i) lp.Add(new LpSegment(t[i], t[(i + 1) % m], i % 10 == 0 ? 0.5f : 1f));
+        for (var i = 0; i + 7 < m; i += 10) lp.Add(new LpSegment(t[i], t[i + 7], 0.5f));
+        ls.SetLp([.. lp]);
+        ls.SetLp([.. lp.Select((e, i) => i % 10 == 0 ? new LpSegment(e.U, t[(pos[e.U] + 2) % m], e.X) : e)]);
+        ls.LpFlash = true;
+        Assert.InRange(ls.LpNew.Count(x => x), lp.Count / 12, lp.Count / 10 + 1);
+        view = Viewport.Fit(ls, 1280, 800);
+        ms.Clear();
+        for (var i = 0; i < 400; ++i)
+        {
+            if (i % 200 < 80) view.Zoom(1.04, 640, 400);
+            else if (i % 200 < 120) view.Pan(9, 5);
+            else view.Zoom(1 / 1.04, 640, 400);
+            var st = r.Render(surf.Canvas, ls, view);
+            if (i >= 10) ms.Add(st.Ms);
+        }
+        output.WriteLine($"render ms, {m} nodes with LP overlay ({lp.Count} edges): " + FrameStats.Describe(ms));
+        Assert.True(FrameStats.Percentile(ms, 0.95) <= 16, "p95 render time with the LP overlay above 16 ms");
     }
 }
 
 public class ViewModelTests
 {
+    [Fact]
+    public void T_vm_solver_view_provenance()
+    {
+        var vm = new MainViewModel();
+        Assert.Equal("NO TOUR YET", vm.UbBadge.Text);
+        vm.OnTelemetry(Packet(1, 2700, double.NaN, 2));
+        vm.OnSolverEvent(new SolverEvent(EventKind.UbImproved, 0.1, 2700, true, "construct"));
+        Assert.Equal(("UB · HEURISTIC (construct)", "heuristic"), vm.UbBadge);
+        Assert.Equal("NO BOUND YET", vm.LbBadge.Text);
+        vm.OnTelemetry(Packet(2, 2600, 2500, 6));
+        vm.OnSolverEvent(new SolverEvent(EventKind.LbImproved, 0.2, 2500, false, "lp"));
+        Assert.Equal(("LB · LP BOUND", "lp"), vm.LbBadge);
+        vm.OnCutRound(new CutRoundPacket { Round = 1, Sec = 5, Blossom = 2, LpValue = 2500 });
+        Assert.Equal("separating", vm.CutState);
+        vm.OnSolverEvent(new SolverEvent(EventKind.NoViolatedCuts, 0.3, 2510, false, ""));
+        Assert.Equal("no violated cuts", vm.CutState);
+        vm.OnCutRound(new CutRoundPacket { Round = 2, Component = 1 });
+        Assert.Equal(1UL, vm.TotalComponent);
+        Assert.Equal(5UL, vm.TotalSec);
+        vm.OnTreeNode(new TreeNodePacket { Id = 0, Parent = uint.MaxValue, State = (byte)TreeNodeState.Branched });
+        vm.OnTreeNode(new TreeNodePacket { Id = 1, Parent = 0, Depth = 1, State = (byte)TreeNodeState.Open });
+        vm.OnTreeNode(new TreeNodePacket { Id = 2, Parent = 0, Depth = 1, State = (byte)TreeNodeState.Open });
+        vm.OnTreeNode(new TreeNodePacket { Id = 1, Parent = 0, Depth = 1, State = (byte)TreeNodeState.Pruned });  // update in place
+        Assert.Equal(3, vm.Tree.Count);
+        Assert.Equal(1, vm.TreeOpen);
+        vm.OnSolverEvent(new SolverEvent(EventKind.UbImproved, 0.5, 2579, false, "lp_integral"));
+        Assert.Equal(("UB · LP (lp_integral)", "lp"), vm.UbBadge);
+        vm.OnSolverEvent(new SolverEvent(EventKind.Proven, 0.6, 2579, false, ""));
+        Assert.Equal(("OPTIMAL PROVEN", "proven"), vm.LbBadge);
+        vm.OnTelemetry(Packet(3, 2579, 141_000_000, 4));
+        Assert.Equal("lagrangian", vm.LbSource);   // packet field (scalable runs) ...
+        Assert.Equal("OPTIMAL PROVEN", vm.LbBadge.Text);  // ... never hides a proof
+        Assert.Equal(LogCategory.Cuts, LogLine.Classify("cut_round round=3 lp=1"));
+        Assert.Equal(LogCategory.Heuristic, LogLine.Classify("polish heuristic=true ub=5"));
+        Assert.Equal(LogCategory.Lp, LogLine.Classify("pricing round=1 global_lb=3"));
+        Assert.Equal(LogCategory.Tree, LogLine.Classify("tree_progress nodes=1000"));
+        Assert.Equal(LogCategory.System, LogLine.Classify("[app] run started"));
+        vm.Reset();
+        Assert.Empty(vm.Tree);
+        Assert.Empty(vm.Events);
+        Assert.Equal("-", vm.CutState);
+    }
+
     private static TelemetryPacket Packet(ulong seq, double ub, double lb, uint phase = 5) => new()
     {
         MagicVersion = Protocol.TelemetryMagic,
