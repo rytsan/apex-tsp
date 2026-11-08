@@ -129,7 +129,11 @@ public sealed partial class MainWindow
 
         var left = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 10, Margin = new Thickness(12, 0, 6, 12) };
         left.Children.Add(Card("Campaign (historical benchmark)", controls));
-        var table = Card("Comparison (live)", _campTable, fill: true);
+        var tableBody = new DockPanel();
+        DockPanel.SetDock(_campSummary, Dock.Bottom);
+        _campSummary.Margin = new Thickness(0, 8, 0, 0);
+        tableBody.Children.AddRange([_campSummary, _campTable]);
+        var table = Card("Comparison (live): time vs published Concorde and vs Concorde here", tableBody, fill: true);
         Grid.SetRow(table, 1);
         left.Children.Add(table);
         var right = Card("Running now", live, fill: true);
@@ -411,13 +415,20 @@ public sealed partial class MainWindow
         _campStatus.Text = string.Create(CultureInfo.InvariantCulture, $"{done} / {_plan.Count} runs done · at most {left / 3600:0.0} h left (time boxes; most runs stop earlier)");
     }
 
+    private readonly TextBlock _campSummary = new() { TextWrapping = TextWrapping.Wrap, FontSize = 12 };
+
+    // Seconds from a published field ("9.74", "428996.2 (3)"); null for "~4 years", "OPEN", empty.
+    private static double? Published(string raw) =>
+        double.TryParse(raw.Split(' ')[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : null;
+
     private void RefreshCampaignTable()
     {
         var dir = CampaignDir;
         var refs = ReferenceTable.Load();
         var lines = new List<string>
         {
-            "instance          n  reference  | APEX exact          | APEX scal.  | Concorde           | LKH-3       | exact/Conc.",
+            "                         first solved          |   published Concorde time, s         |     this machine, s     |  APEX exact time ÷                        | gap vs reference",
+            "instance          n      year  CPU time       |  1998 Alpha  1999 Alpha  2003 Xeon   | Concorde   APEX exact   | Conc.here  2003   1999   1998   first    | APEX scal.  LKH-3",
         };
         JsonElement? Read(string inst, string solver)
         {
@@ -428,23 +439,46 @@ public sealed partial class MainWindow
         }
         static double Num(JsonElement? e, string k) => e is { } v && v.TryGetProperty(k, out var x) && x.ValueKind == JsonValueKind.Number ? x.GetDouble() : double.NaN;
         static string Str(JsonElement? e, string k) => e is { } v && v.TryGetProperty(k, out var x) && x.ValueKind == JsonValueKind.String ? x.GetString() ?? "" : "";
-        string Exact(JsonElement? e) => e is null ? "-" : Str(e, "status") == "OPTIMAL_PROVEN" ? $"proven {Num(e, "wall_s"),8:0.0} s" : $"{Short(Str(e, "status"))} {GapCert(e)}";
-        static string GapCert(JsonElement? e) { var ub = Num(e, "ub"); var lb = Num(e, "lb"); return double.IsNaN(lb) || double.IsNaN(ub) ? "" : $"gap {100 * (ub - lb) / ub:0.###}%"; }
-        static string Short(string s) => s switch { "TIME_LIMIT" => "limit", "HEURISTIC" => "heur", _ => s.ToLowerInvariant() };
-        string VsRef(JsonElement? e, long refv) => e is null ? "-" : double.IsNaN(Num(e, "ub")) ? Short(Str(e, "status")) : $"{100 * (Num(e, "ub") - refv) / refv:+0.000;-0.000}%";
+        static bool Proven(JsonElement? e) => Str(e, "status") == "OPTIMAL_PROVEN";
+        static string T(double? s) => s is not { } v || double.IsNaN(v) ? "-" : v < 100 ? v.ToString("0.00", CultureInfo.InvariantCulture) : v.ToString("0", CultureInfo.InvariantCulture);
+        static string Time(JsonElement? e) => e is null ? "-" : Proven(e) ? T(Num(e, "wall_s")) : Str(e, "status") == "TIME_LIMIT" ? "limit" : Str(e, "status").ToLowerInvariant();
+        static string R(double? a, double? b) => a is { } x && b is { } y && y > 0 && !double.IsNaN(x) ? (x / y).ToString(x / y >= 10 ? "0" : "0.0#", CultureInfo.InvariantCulture) + "x" : "-";
+        string VsRef(JsonElement? e, long refv) => e is null ? "-" : double.IsNaN(Num(e, "ub")) ? Str(e, "status").ToLowerInvariant() : (100 * (Num(e, "ub") - refv) / refv).ToString("+0.000;-0.000", CultureInfo.InvariantCulture) + "%";
         var inst = CampaignInstances();
         var total = 0;
+        var rHere = new List<double>();
+        var r03 = new List<double>();
+        var r99 = new List<double>();
+        var c03 = new List<double>();
+        var r98 = new List<double>();
+        var rFirst = new List<double>();
         foreach (var (name, n) in inst)
         {
             var refv = refs.TryGetValue(name, out var rr) ? rr.Value : 0;
             JsonElement? ex = Read(name, "apex_exact"), sc = Read(name, "apex_scalable"), co = Read(name, "concorde"), lk = Read(name, "lkh");
             total += new[] { ex, sc, co, lk }.Count(x => x is not null);
-            var ratio = Str(ex, "status") == "OPTIMAL_PROVEN" && Str(co, "status") == "OPTIMAL_PROVEN" ? $"{Num(ex, "wall_s") / Math.Max(Num(co, "wall_s"), 1e-3):0.0}x" : "-";
-            var running = _campaignActive && _current is { } c && c.Instance == name ? " ◀" : "";
+            double? apex = Proven(ex) ? Num(ex, "wall_s") : null, conc = Proven(co) ? Num(co, "wall_s") : null;
+            double? p99 = rr is null ? null : Published(rr.Concorde99), p03 = rr is null ? null : Published(rr.Concorde03);
+            double? p98 = rr is null ? null : Published(rr.Abcc98), pFirst = rr is null ? null : Published(rr.FirstSolve);
+            if (apex is { } a8 && p98 is { } q8 && q8 > 0) r98.Add(Math.Max(a8, 1e-3) / q8);
+            if (apex is { } af && pFirst is { } qf && qf > 0) rFirst.Add(Math.Max(af, 1e-3) / qf);
+            if (apex is { } a && conc is { } c && c > 0) rHere.Add(a / Math.Max(c, 1e-3));
+            if (apex is { } a3 && p03 is { } q3 && q3 > 0) r03.Add(Math.Max(a3, 1e-3) / q3);
+            if (apex is { } a9 && p99 is { } q9 && q9 > 0) r99.Add(Math.Max(a9, 1e-3) / q9);
+            if (conc is { } cc && p03 is { } q && q > 0) c03.Add(Math.Max(cc, 1e-3) / q);
+            var running = _campaignActive && _current is { } cur && cur.Instance == name ? " ◀" : "";
             lines.Add(string.Create(CultureInfo.InvariantCulture,
-                $"{name,-14}{n,6}  {refv,10}  | {Exact(ex),-19} | {VsRef(sc, refv),-11} | {Exact(co),-18} | {VsRef(lk, refv),-11} | {ratio}{running}"));
+                $"{name,-14}{n,6}  {(rr?.Year is { Length: > 0 } y ? y : "-"),6}  {(rr?.FirstSolveStated is { Length: > 0 } fs ? fs : "-"),-13} |  {(rr?.Abcc98Stated is { Length: > 0 } a98 ? a98.Replace(" seconds", "") : "-"),10}  {T(p99),10}  {T(p03),9}   | {Time(co),8}  {Time(ex),10}   | {R(apex, conc),8} {R(apex, p03),6} {R(apex, p99),6} {R(apex, p98),6} {R(apex, pFirst),8}  | {VsRef(sc, refv),9}  {VsRef(lk, refv),9}{running}"));
         }
         _campTable.ItemsSource = lines;
+        static string G(List<double> v) => v.Count == 0 ? "-" : Math.Exp(v.Average(Math.Log)).ToString("0.##", CultureInfo.InvariantCulture) + "x";
+        _campSummary.Text =
+            "Times in seconds, proven optimum only (\"limit\" = time box reached). Ratio = APEX exact time ÷ the other time: above 1x APEX is slower, below 1x faster.\n" +
+            $"Geometric mean — APEX ÷ Concorde on this machine: {G(rHere)} ({rHere.Count} instances) · APEX ÷ Concorde 2003 published: {G(r03)} ({r03.Count}) · " +
+            $"APEX ÷ Concorde 1999 published: {G(r99)} ({r99.Count}) · APEX ÷ Concorde 1998 paper: {G(r98)} ({r98.Count}) · APEX ÷ first solution: {G(rFirst)} ({rFirst.Count}) · " +
+            $"Concorde here ÷ Concorde 2003 (hardware + version): {G(c03)} ({c03.Count}).\n" +
+            "First solved: year (Waterloo milestones) and CPU time where published (usa13509, d15112, pla85900). 1998 Alpha: the 1977-1992 record instances re-solved by Applegate, Bixby, Chvátal and Cook " +
+            "(Documenta Math. ICM 1998, 400 MHz AlphaServer); the original 1977-1991 run times are only in the original papers, not in the sources used.";
         if (!_campaignActive)
             _campStatus.Text = $"{inst.Count} instances (n <= {(int)(_campMaxN.Value ?? 0)}), {total} results in {dir}";
     }

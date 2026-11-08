@@ -28,6 +28,40 @@ SOURCES = {
 HW99 = "Compaq XP1000 500 MHz, Concorde 99.12.15 (-s 99)"
 HW03 = "Intel Xeon 2.8 GHz (1 CPU), Concorde 03.12.19, CPLEX 6.5"
 MONA_URL = "https://www.math.uwaterloo.ca/tsp/data/ml/mona-lisa100K.tsp"
+YEAR_S = 365.25 * 86400
+# Run time of the FIRST optimality proof, where a page states it: (CPU seconds, as stated,
+# hardware, source, phrase the source page must contain or None for a non-HTML source).
+FIRST_SOLVE = {
+    "usa13509": (4 * YEAR_S, "~4 years", "network of many machine types (1998 Concorde)",
+                 SOURCES_99 := "https://www.math.uwaterloo.ca/tsp/concorde/benchmarks/bench99.html", "usa13509 9539 ~4 years",
+                 "very rough estimate (source note 5); the 1998 paper gives ~10 years for the same run"),
+    "d15112": (22.6 * YEAR_S, "~22.6 years", "network of 110 processors at Rice and Princeton (2001 Concorde)", SOURCES_99,
+               "d15112 164569 ~22.6 years", ""),
+    "pla85900": (136 * YEAR_S, "approximately 136 CPU years", "Xeon / Athlon clusters, scaled to a 2.4 GHz AMD Opteron 250",
+                 "https://math.uwaterloo.ca/tsp/pla85900/compute/cpu.htm", "approximately 136 CPU years", "2005-2006"),
+}
+# Applegate, Bixby, Chvatal, Cook, "On the Solution of Traveling Salesman Problems", Documenta
+# Mathematica Extra Volume ICM 1998 III 645-656, table p. 654: the record instances of 1977-1992
+# re-solved with their 1998 code on one processor of a Digital AlphaServer 4100 (400 MHz);
+# usa13509 on a network of 48 workstations (cumulative CPU estimate).
+ABCC98_URL = "https://ems.press/content/book-chapter-files/27276"
+ABCC98_HW = "Digital AlphaServer 4100 400 MHz, 1 processor (usa13509: 48 workstations), 1998 code"
+ABCC98 = {"gr120": (3.3, "3.3 seconds"), "lin318": (24.6, "24.6 seconds"), "pr1002": (94.7, "94.7 seconds"),
+          "gr666": (260.0, "260.0 seconds"), "att532": (294.3, "294.3 seconds"), "pr2392": (342.2, "342.2 seconds"),
+          "ts225": (438.9, "438.9 seconds"), "pla7397": (49.5 * 86400, "49.5 days"), "usa13509": (10 * YEAR_S, "∼10 years")}
+
+
+def abcc98_text():
+    """Text of the 1998 paper (pdftotext); None when the tool is missing (values kept, not re-checked)."""
+    import shutil
+    import subprocess
+    import tempfile
+    if not shutil.which("pdftotext"):
+        return None
+    with tempfile.NamedTemporaryFile(suffix=".pdf") as f:
+        f.write(get(ABCC98_URL))
+        f.flush()
+        return re.sub(r"\s+", " ", subprocess.run(["pdftotext", "-layout", f.name, "-"], capture_output=True, text=True).stdout)
 
 # Benchmark set: TSPLIB instances in the engine's metrics (EUC_2D / CEIL_2D) up to ~1000 nodes,
 # the larger project references, the solved milestones in these metrics, and mona-lisa100K.
@@ -104,6 +138,10 @@ def file_info(name):
 
 def main():
     pages = {k: text(u) for k, u in SOURCES.items()}
+    t98 = abcc98_text()
+    for name, (_, said) in ABCC98.items():
+        if t98 is not None and not re.search(re.escape(name) + r"\s+[\d,]+\s+\d[\d,]*\s+nodes?\s+" + re.escape(said), t98):
+            sys.exit(f"{name}: '{said}' not found in the 1998 paper")
     best = parse_best(pages["tsplib_best"])
     mil = parse_milestones(pages["milestones"])
     names = set(SET) | set(HISTORY_ONLY)
@@ -130,6 +168,14 @@ def main():
             r.update(value=val or "", value_kind="optimal" if val else "", value_source=SOURCES["tsplib_best"] if val else "")
         if name in mil:
             r.update(year_solved=mil[name][0], solved_by=mil[name][1], history_source=SOURCES["milestones"])
+        if name in FIRST_SOLVE:
+            sec, said, hw, url, phrase, note = FIRST_SOLVE[name]
+            if phrase is not None and phrase not in (pages["concorde99"] if url == SOURCES["concorde99"] else text(url)):
+                sys.exit(f"{name}: first-solve time not found on {url}")
+            r.update(first_solve_s=round(sec), first_solve_as_stated=said, first_solve_hw=hw, first_solve_source=url,
+                     first_solve_note=note)
+        if name in ABCC98:
+            r.update(abcc98_s=round(ABCC98[name][0], 1), abcc98_as_stated=ABCC98[name][1], abcc98_hw=ABCC98_HW, abcc98_source=ABCC98_URL)
         if name in b99:
             s, nodes, raw = b99[name]
             r.update(concorde99_s="" if s is None else s, concorde99_nodes="" if nodes is None else nodes, concorde99_raw=raw,
@@ -142,7 +188,9 @@ def main():
         rows.append(r)
 
     cols = ["instance", "n", "metric", "in_set", "value", "value_kind", "value_source", "year_solved", "solved_by",
-            "history_source", "concorde99_s", "concorde99_nodes", "concorde99_raw", "concorde99_hw", "concorde99_source",
+            "history_source", "first_solve_s", "first_solve_as_stated", "first_solve_hw", "first_solve_source", "first_solve_note",
+            "abcc98_s", "abcc98_as_stated", "abcc98_hw", "abcc98_source",
+            "concorde99_s", "concorde99_nodes", "concorde99_raw", "concorde99_hw", "concorde99_source",
             "concorde03_s", "concorde03_nodes", "concorde03_hw", "concorde03_source", "note"]
     with open(os.path.join(HERE, "reference.csv"), "w", newline="") as f:
         w = csv.DictWriter(f, cols, lineterminator="\n")

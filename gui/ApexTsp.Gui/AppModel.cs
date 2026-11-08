@@ -244,13 +244,15 @@ public sealed class AppStore
 // engine/tools/history/reference.csv (M6.5): known value + history of an instance, for the
 // instance summary. Read-only; columns by header name.
 public sealed record ReferenceRow(string Instance, long Value, string Kind, string Year, string SolvedBy,
-                                  string Concorde99, string Concorde03, string Note)
+                                  string Concorde99, string Concorde03, string Note,
+                                  string Abcc98 = "", string Abcc98Stated = "", string FirstSolve = "", string FirstSolveStated = "", string FirstSolveHw = "")
 {
     public string Summary()
     {
         var v = Kind == "optimal" ? $"optimum {Value} (TSPLIB)" : $"best known tour {Value} (not proven optimal)";
         var parts = new List<string> { v };
-        if (Year.Length > 0) parts.Add($"first solved {Year} by {SolvedBy}");
+        if (Year.Length > 0) parts.Add($"first solved {Year} by {SolvedBy}" + (FirstSolveStated.Length > 0 ? $" in {FirstSolveStated} ({FirstSolveHw})" : ""));
+        if (Abcc98Stated.Length > 0) parts.Add($"Concorde 1998 paper: {Abcc98Stated} (400 MHz AlphaServer)");
         if (Concorde99.Length > 0) parts.Add($"Concorde 1999: {Concorde99} s (500 MHz Alpha)");
         if (Concorde03.Length > 0) parts.Add($"Concorde 2003: {Concorde03} s (2.8 GHz Xeon)");
         if (Note.Length > 0) parts.Add(Note);
@@ -289,7 +291,7 @@ public static class ReferenceTable
             if (!long.TryParse(G("value"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)) continue;
             var c99 = G("concorde99_raw");
             rows[G("instance")] = new ReferenceRow(G("instance"), v, G("value_kind"), G("year_solved"), G("solved_by"),
-                c99, G("concorde03_s"), G("note"));
+                c99, G("concorde03_s"), G("note"), G("abcc98_s"), G("abcc98_as_stated"), G("first_solve_s"), G("first_solve_as_stated"), G("first_solve_hw"));
         }
         return path == Locate() ? _rows = rows : rows;
     }

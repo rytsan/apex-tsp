@@ -121,8 +121,13 @@ def main():
 
         kind = "best known tour" if r["value_kind"] == "best_known_tour" else "opt"
         hist = f"{r['year_solved']} {r['solved_by']}" if r["year_solved"] else ""
-        table.append(f"| {name} | {n} | {refv} ({kind}) | {hist} | {r['concorde99_raw'] or '-'} | {r['concorde03_s'] or '-'} | "
-                     f"{exact(ex)} | {heur(sc)} | {exact(co)} | {heur(lk)} | {fnum(ratio, '{:.1f}x')} |")
+        if r.get("first_solve_as_stated"):
+            hist += f" ({r['first_solve_as_stated']} CPU)"
+        def ratio_to(sec):
+            return fnum(ex["wall_s"] / float(sec), "{:.2g}x") if ex and ex.get("status") == "OPTIMAL_PROVEN" and sec else "-"
+        vs_pub = f"{ratio_to(r.get('abcc98_s'))} / {ratio_to(r['concorde03_s'])} / {ratio_to(r.get('first_solve_s'))}"
+        table.append(f"| {name} | {n} | {refv} ({kind}) | {hist} | {r.get('abcc98_as_stated') or '-'} | {r['concorde99_raw'] or '-'} | {r['concorde03_s'] or '-'} | "
+                     f"{exact(ex)} | {heur(sc)} | {exact(co)} | {heur(lk)} | {fnum(ratio, '{:.1f}x')} | {vs_pub} |")
     json.dump({"meta": meta, "rows": data}, open(os.path.join(figdir, "history.json"), "w"), indent=1)
 
     def series(solver, f):
@@ -176,10 +181,10 @@ def main():
     if have_gap:
         lines += ["![gap vs n](history/gap_vs_n.svg)", ""]
     lines += ["## Per instance", "",
-              "| instance | n | reference | first solved | Concorde 1999 s (500 MHz Alpha) | Concorde 2003 s (2.8 GHz Xeon) | APEX exact | APEX scalable vs ref | Concorde here | LKH-3 vs ref | APEX / Concorde |",
-              "|---|---|---|---|---|---|---|---|---|---|---|"] + table
+              "| instance | n | reference | first solved | Concorde 1998 paper (400 MHz Alpha) | Concorde 1999 s (500 MHz Alpha) | Concorde 2003 s (2.8 GHz Xeon) | APEX exact | APEX scalable vs ref | Concorde here | LKH-3 vs ref | APEX / Concorde here | APEX / 1998 / 2003 / first |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"] + table
     lines += ["", "## Milestones: then and now", "",
-              "| year | team | instance | n | published then | Concorde here | APEX here |", "|---|---|---|---|---|---|---|"]
+              "| year | team | instance | n | first solution CPU (published) | Concorde 1998 paper | Concorde 1999 | Concorde here | APEX here |", "|---|---|---|---|---|---|---|---|---|"]
     for r in sorted((r for r in ref.values() if r["year_solved"]), key=lambda r: int(r["year_solved"])):
         rr = runs.get(r["instance"], {})
         now_c = rr.get("concorde")
@@ -192,7 +197,8 @@ def main():
             if best_apex:
                 a = (f"proven {fnum(best_apex['wall_s'])} s" if best_apex.get("status") == "OPTIMAL_PROVEN"
                      else f"UB {fnum(gap_ref(best_apex, int(r['value'])), '{:+.3f}')}% vs opt in {fnum(best_apex.get('wall_s'))} s")
-        lines.append(f"| {r['year_solved']} | {r['solved_by']} | {r['instance']} | {r['n']} | {r['concorde99_raw'] or '-'} | {c} | {a} |")
+        first = f"{r['first_solve_as_stated']} ({r['first_solve_hw']})" if r.get("first_solve_as_stated") else "not in the sources"
+        lines.append(f"| {r['year_solved']} | {r['solved_by']} | {r['instance']} | {r['n']} | {first} | {r.get('abcc98_as_stated') or '-'} | {r['concorde99_raw'] or '-'} | {c} | {a} |")
     lines += ["", "mona-lisa100K: compared with its best known tour 5757191 (best bound 5757084); no tour of it is called optimal here.", ""]
     with open(out_md, "w") as f:
         f.write("\n".join(lines))

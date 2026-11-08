@@ -17,6 +17,8 @@ GROUPS = {  # field -> the source field that must be present when the field is
     "value": "value_source", "year_solved": "history_source", "solved_by": "history_source",
     "concorde99_raw": "concorde99_source", "concorde99_hw": "concorde99_source",
     "concorde03_s": "concorde03_source", "concorde03_hw": "concorde03_source",
+    "abcc98_s": "abcc98_source", "abcc98_hw": "abcc98_source",
+    "first_solve_s": "first_solve_source", "first_solve_as_stated": "first_solve_source", "first_solve_hw": "first_solve_source",
 }
 names = [r["instance"] for r in ref]
 assert len(names) == len(set(names)), "duplicate instance"
