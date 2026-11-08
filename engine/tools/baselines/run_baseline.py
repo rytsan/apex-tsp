@@ -93,13 +93,15 @@ def concorde(inst, limit, seed, work):
             "wall_s": wall, "ram_peak_bytes": rss, "tour": tour, "log": out}
 
 
-def lkh(inst, limit, seed, work):
+def lkh(inst, limit, seed, work, n=0):
     shutil.copy(inst, os.path.join(work, "in.tsp"))
     par = os.path.join(work, "run.par")
     with open(par, "w") as f:
         f.write(f"PROBLEM_FILE = in.tsp\nOUTPUT_TOUR_FILE = out.tour\nRUNS = 1\nSEED = {seed}\n")
         if limit:
             f.write(f"TIME_LIMIT = {limit}\n")
+        if n > 20000:  # the default alpha-nearness ascent is quadratic in time and memory at this size
+            f.write("CANDIDATE_SET_TYPE = POPMUSIC\nINITIAL_PERIOD = 100\n")
     rc, out, wall, rss = run([BIN["lkh"], "run.par"], work, limit * 1.5 + 60 if limit else 0)
     tour = []
     tf = os.path.join(work, "out.tour")
@@ -135,7 +137,8 @@ def main():
     name, xs, ys, ceil = read_instance(a.instance)
     work = a.keep or tempfile.mkdtemp(prefix=f"apex_{a.solver}_")
     os.makedirs(work, exist_ok=True)
-    r = (concorde if a.solver == "concorde" else lkh)(os.path.abspath(a.instance), a.time_limit, a.seed, work)
+    inst = os.path.abspath(a.instance)
+    r = concorde(inst, a.time_limit, a.seed, work) if a.solver == "concorde" else lkh(inst, a.time_limit, a.seed, work, len(xs))
     tour = r.pop("tour")
     log = r.pop("log")
     valid = len(tour) == len(xs) and sorted(tour) == list(range(len(xs)))
