@@ -1,5 +1,7 @@
 #include "hk/held_karp.hpp"
 
+#include "core/control.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -112,6 +114,8 @@ HkResult held_karp(const Instance& inst, const CandidateGraph& g, int64_t ub, co
     double lambda = cfg.lambda0;
     uint32_t stall = 0;
     for (; res.iterations < cfg.max_iterations; ++res.iterations) {
+        pause_point();
+        if (cancel_requested()) break;
         if (cfg.time_limit_s > 0 && std::chrono::duration<double>(Clock::now() - t0).count() > cfg.time_limit_s) break;
         double L = 0;
         if (!one_tree_candidate(g, pi, order, w, deg, L)) break;

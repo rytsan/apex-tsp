@@ -78,11 +78,13 @@ std::vector<std::vector<uint32_t>> solve_leaves(const Instance& inst, const std:
         for (size_t i; (i = next.fetch_add(1)) < leaves.size();) {
             const auto& ids = tree[leaves[i]].points;
             bool ex = false, pr = false;
+            if (cfg.on_cluster) cfg.on_cluster(static_cast<uint32_t>(leaves[i]), 1);
             auto local = solve_leaf(sub_instance(inst, ids), cfg, mix(cfg.seed ^ mix(i)), &ex, &pr);
             for (auto& v : local) v = ids[v];
             out[leaves[i]] = std::move(local);
             exact[i] = ex;
             proven[i] = pr;
+            if (cfg.on_cluster) cfg.on_cluster(static_cast<uint32_t>(leaves[i]), 0);
         }
         } catch (...) {  // e.g. std::bad_alloc under the memory cap: rethrown on the caller's thread
             err[tid] = std::current_exception();

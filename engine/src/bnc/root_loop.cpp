@@ -226,6 +226,7 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
         if (round == 0) out.first_dual_flips = res.initial_dual_flips;
         out.peak_factor_nnz = std::max(out.peak_factor_nnz, res.peak_factor_nnz);
         out.refactorizations += res.refactorizations;
+        out.lp_iterations += res.iterations;
         if (res.status == SimplexResult::Status::Infeasible) {
             if (res.farkas.empty()) throw std::logic_error("cut loop: infeasible LP without a Farkas ray");
             basis_ = res.basis;

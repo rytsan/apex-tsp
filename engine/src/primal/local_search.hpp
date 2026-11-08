@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/instance.hpp"
+#include "core/control.hpp"
 #include "graph/candidate_graph.hpp"
 #include "graph/tours.hpp"
 #include "primal/two_opt.hpp"
@@ -95,9 +96,12 @@ public:
         for (uint32_t a : start_order) push(a);
         uint64_t moves = 0, iter = 0;
         while (!queue_.empty()) {
-            if (has_deadline && (++iter & 255) == 0 && std::chrono::steady_clock::now() > deadline) {
-                st.time_limit_hit = true;
-                break;
+            if ((++iter & 255) == 0) {
+                pause_point();
+                if (cancel_requested() || (has_deadline && std::chrono::steady_clock::now() > deadline)) {
+                    st.time_limit_hit = true;
+                    break;
+                }
             }
             const uint32_t a = queue_.front();
             queue_.pop_front();

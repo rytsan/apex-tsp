@@ -66,15 +66,21 @@ TEST_CASE("T_report_json") {
     r.seed = 42;
     r.threads = 1;
     r.ram_peak_bytes = 123;
+    r.hardware = "cpu";
+    r.mem_limit_mb = 4096;
     std::ostringstream a;
     apex::write_report_json(a, r);
     CHECK(a.str() ==
-          "{\"instance\":\"mona \\\"lisa\\\"\\n\",\"mode\":\"scalable\",\"ub\":5938927,\"lb\":null,"
-          "\"gap_pct\":null,\"lb_source\":null,\"wall_s\":1.235,\"seed\":42,\"threads\":1,\"ram_peak_bytes\":123,\"status\":\"done\"}\n");
+          "{\"instance\":\"mona \\\"lisa\\\"\\n\",\"mode\":\"scalable\",\"status\":\"done\",\"ub\":5938927,\"lb\":null,"
+          "\"lb_source\":null,\"gap_pct\":null,\"wall_s\":1.235,\"ram_peak_bytes\":123,\"disk_bytes\":0,\"iterations\":0,"
+          "\"refactorizations\":0,\"cuts_by_family\":{\"sec\":0,\"blossom\":0,\"component\":0},\"tours_found\":0,"
+          "\"seed\":42,\"threads\":1,\"hardware\":\"cpu\",\"mem_limit_mb\":4096,\"verification_rounds\":0}\n");
+    CHECK(a.str() == apex::report_json(r));
     r.lb = 5757084;
     r.lb_source = "lp";
     std::ostringstream b;
     apex::write_report_json(b, r);
-    CHECK(b.str().find("\"lb\":5757084,\"gap_pct\":3.061883,\"lb_source\":\"lp\"") != std::string::npos);
+    CHECK(b.str().find("\"lb\":5757084,\"lb_source\":\"lp\",\"gap_pct\":3.061883") != std::string::npos);
+    CHECK(apex::hardware_string().find("logical cores") != std::string::npos);
     CHECK(apex::peak_rss_bytes() > 0);
 }

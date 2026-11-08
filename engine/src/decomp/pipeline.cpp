@@ -1,4 +1,5 @@
 #include "decomp/pipeline.hpp"
+#include "core/control.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -81,7 +82,8 @@ PolishStats polish_tour(Tour& tour, const Instance& inst, const CandidateGraph& 
             ic.max_stall = cfg.stall_per_node * n;
             if (timed) ic.time_limit_s = cfg.time_limit_s;
             else ic.max_iterations = cfg.iterations_per_node * n * rounds;
-            iters[r] = iterated_local_search(runs[r], inst, g, ic).iterations;
+            iters[r] = iterated_local_search(runs[r], inst, g, ic, nullptr,
+                                             r == 0 ? cfg.on_tour : std::function<void(const Tour&)>{}).iterations;
         });
         size_t best = 0;
         for (size_t r = 1; r < k; ++r)
@@ -100,7 +102,7 @@ PolishStats polish_tour(Tour& tour, const Instance& inst, const CandidateGraph& 
         std::vector<uint64_t> iters(k, 0);
         for (uint32_t r = 0; r < rounds; ++r) {
             const double left = cfg.time_limit_s - since(t0);
-            if (timed && left <= 0.5) break;
+            if ((timed && left <= 0.5) || cancel_requested()) break;
             const uint32_t offset = static_cast<uint32_t>((uint64_t(r) * (len / 2)) % n);
             const double seg_s = timed ? std::min(round_s, left) / waves : 0;
             parallel_for(k, cfg.threads, [&](size_t s) {
@@ -128,6 +130,10 @@ PolishStats polish_tour(Tour& tour, const Instance& inst, const CandidateGraph& 
                     tour.order[(begin + j) % n] = ids[p.order[fwd ? (z + j) % m : (z + m - j) % m]];
             });
             ++st.rounds;
+            if (cfg.on_tour) {
+                tour.cost = tour_cost(inst, tour);
+                cfg.on_tour(tour);
+            }
         }
         st.segments = k;
         for (uint64_t x : iters) st.iterations += x;

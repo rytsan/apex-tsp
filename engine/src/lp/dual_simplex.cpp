@@ -1,4 +1,5 @@
 #include "lp/dual_simplex.hpp"
+#include "core/control.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -95,7 +96,8 @@ public:
         uint64_t last_progress = it_;
         for (;;) {
             if (it_ >= opt_.iteration_limit) return Status::IterationLimit;
-            if (elapsed() > opt_.time_limit_s) return Status::TimeLimit;
+            pause_point();
+            if (elapsed() > opt_.time_limit_s || cancel_requested()) return Status::TimeLimit;
             if (force_refactor_ || fac_.needs_refactor()) recompute(false);
 
             // Pricing: leaving row with largest infeasibility^2 / weight.
@@ -235,7 +237,8 @@ public:
         compute_primal();
         for (;;) {
             if (it_ >= opt_.iteration_limit) return Status::IterationLimit;
-            if (elapsed() > opt_.time_limit_s) return Status::TimeLimit;
+            pause_point();
+            if (elapsed() > opt_.time_limit_s || cancel_requested()) return Status::TimeLimit;
             if (force_refactor_ || fac_.needs_refactor()) { recompute_factors(); compute_primal(); }
 
             std::vector<double> cb(m_, 0.0);

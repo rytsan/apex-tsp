@@ -6,6 +6,8 @@
 #include <fstream>
 #include <istream>
 #include <ostream>
+#include <sstream>
+#include <thread>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -18,6 +20,11 @@
 #include <psapi.h>
 #else
 #include <sys/resource.h>
+#endif
+#if defined(_MSC_VER)
+#include <intrin.h>
+#elif defined(__x86_64__) || defined(__i386__)
+#include <cpuid.h>
 #endif
 
 namespace apex {
@@ -152,14 +159,19 @@ Tour read_tour(const std::string& path, const Instance& inst) {
     return parse_tour(f, inst, path);
 }
 
-void write_report_json(std::ostream& out, const Report& r) {
+std::string report_json(const Report& r) {
+    std::ostringstream out;
     char num[64];
     out << "{\"instance\":";
     json_string(out, r.instance);
     out << ",\"mode\":";
     json_string(out, r.mode);
+    out << ",\"status\":";
+    json_string(out, r.status);
     out << ",\"ub\":" << r.ub << ",\"lb\":";
     if (r.lb) out << *r.lb; else out << "null";
+    out << ",\"lb_source\":";
+    if (r.lb_source) json_string(out, *r.lb_source); else out << "null";
     out << ",\"gap_pct\":";
     if (r.lb && r.ub != 0) {
         std::snprintf(num, sizeof num, "%.6f", 100.0 * static_cast<double>(r.ub - *r.lb) / static_cast<double>(r.ub));
@@ -167,14 +179,18 @@ void write_report_json(std::ostream& out, const Report& r) {
     } else {
         out << "null";
     }
-    out << ",\"lb_source\":";
-    if (r.lb_source) json_string(out, *r.lb_source); else out << "null";
     std::snprintf(num, sizeof num, "%.3f", r.wall_s);
-    out << ",\"wall_s\":" << num << ",\"seed\":" << r.seed << ",\"threads\":" << r.threads
-        << ",\"ram_peak_bytes\":" << r.ram_peak_bytes << ",\"status\":";
-    json_string(out, r.status);
-    out << "}\n";
+    out << ",\"wall_s\":" << num << ",\"ram_peak_bytes\":" << r.ram_peak_bytes << ",\"disk_bytes\":" << r.disk_bytes
+        << ",\"iterations\":" << r.iterations << ",\"refactorizations\":" << r.refactorizations
+        << ",\"cuts_by_family\":{\"sec\":" << r.cuts_sec << ",\"blossom\":" << r.cuts_blossom
+        << ",\"component\":" << r.cuts_component << "},\"tours_found\":" << r.tours_found << ",\"seed\":" << r.seed
+        << ",\"threads\":" << r.threads << ",\"hardware\":";
+    json_string(out, r.hardware);
+    out << ",\"mem_limit_mb\":" << r.mem_limit_mb << ",\"verification_rounds\":" << r.verification_rounds << "}\n";
+    return out.str();
 }
+
+void write_report_json(std::ostream& out, const Report& r) { out << report_json(r); }
 
 void write_report_file(const std::string& path, const Report& r) {
     auto f = open_out(path);
@@ -196,6 +212,26 @@ uint64_t peak_rss_bytes() {
     return static_cast<uint64_t>(ru.ru_maxrss) * 1024;  // KiB on Linux
 #endif
 #endif
+}
+
+std::string hardware_string() {
+    std::string brand;
+#if defined(_MSC_VER) || defined(__x86_64__) || defined(__i386__)
+    unsigned int regs[12] = {};
+    for (unsigned int k = 0; k < 3; ++k) {
+#if defined(_MSC_VER)
+        int r[4];
+        __cpuid(r, static_cast<int>(0x80000002u + k));
+        for (int j = 0; j < 4; ++j) regs[4 * k + j] = static_cast<unsigned int>(r[j]);
+#else
+        __get_cpuid(0x80000002u + k, &regs[4 * k], &regs[4 * k + 1], &regs[4 * k + 2], &regs[4 * k + 3]);
+#endif
+    }
+    brand.assign(reinterpret_cast<const char*>(regs), sizeof regs);
+    brand = std::string(trim(brand.c_str()));
+#endif
+    if (brand.empty()) brand = "unknown";
+    return brand + " (" + std::to_string(std::thread::hardware_concurrency()) + " logical cores)";
 }
 
 }  // namespace apex

@@ -30,14 +30,27 @@ struct Report {
     uint64_t seed = 0;
     uint32_t threads = 1;
     uint64_t ram_peak_bytes = 0;
-    std::string status = "done";        // "done" | "MEM_LIMIT"
+    std::string status = "done";        // "done" | "MEM_LIMIT" | B&C status | "CANCELLED"
+    // Sprint 5 schema (M5.2): the IPC FINISHED payload is this JSON, byte for byte.
+    uint64_t disk_bytes = 0;            // checkpoint directory size at the end
+    uint64_t iterations = 0;            // simplex iterations (exact mode; 0 in scalable mode)
+    uint64_t refactorizations = 0;
+    uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0;  // cuts_by_family
+    uint64_t tours_found = 0;           // UB improvements over the run
+    std::string hardware;               // CPU brand string + logical cores
+    uint64_t mem_limit_mb = 0;
+    uint64_t verification_rounds = 0;   // complete-graph pricing passes (exact mode)
 };
 
 // gap_pct = 100 * (ub - lb) / ub when lb is present, else null.
+std::string report_json(const Report& r);
 void write_report_json(std::ostream& out, const Report& r);
 void write_report_file(const std::string& path, const Report& r);
 
 // Peak resident set size of this process (getrusage / GetProcessMemoryInfo).
 uint64_t peak_rss_bytes();
+
+// "<CPU brand string> (<n> logical cores)" via CPUID on x86-64, "unknown" elsewhere.
+std::string hardware_string();
 
 }  // namespace apex

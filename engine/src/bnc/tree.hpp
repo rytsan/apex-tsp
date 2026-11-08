@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -43,6 +44,7 @@ struct BnCConfig {
     DiveConfig dive;
     uint64_t rih_iterations = 2000;                // dive -> best-bound once a node this deep is processed
     std::string tour_path;                         // .tour rewritten atomically on every UB improvement
+    std::function<void(const Tour&)> on_tour;      // also called on every UB improvement (GUI, M5.2)
     double time_limit_s = INFINITY;                // --time-limit (anytime: in-flight node finishes)
     uint64_t max_nodes = UINT64_MAX;
     // Checkpoint v2 (M3.6): <dir>/LATEST names the current v2-<seq>/ snapshot (manifest + files).
@@ -66,7 +68,7 @@ struct BnCConfig {
 };
 
 struct BnCResult {
-    enum class Status { Optimal, TimeLimit, NodeLimit, MemLimit } status = Status::Optimal;
+    enum class Status { Optimal, TimeLimit, NodeLimit, MemLimit, Cancelled } status = Status::Optimal;
     Tour best;                       // best tour found (cost recomputed with the metric)
     int64_t ub = 0;
     double lb = -INFINITY;           // global: min over open nodes (== ub at proof)
@@ -80,6 +82,8 @@ struct BnCResult {
     uint64_t rcf_node_fixings = 0;     // node-scoped fixes passed to children
     uint64_t strong_pivots = 0, strong_candidates = 0, max_node_strong_pivots = 0;  // warm starts whose basis needed dual repair with unchanged columns (must stay 0)
     uint64_t heuristic_calls = 0;
+    // Totals over root and nodes (report, M5.2). Not checkpointed: a resumed run counts its own part.
+    uint64_t lp_iterations = 0, refactorizations = 0, cuts_sec = 0, cuts_blossom = 0, cuts_component = 0;
     uint64_t dive_calls = 0, dive_tours = 0, dive_pivots = 0;
     bool rih_improved = false;
     double heuristic_s = 0;

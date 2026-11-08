@@ -3,6 +3,7 @@
 // heuristic: leaf tours for the scalable mode. UB only: no leaf bound is ever reported or used.
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "core/instance.hpp"
@@ -16,6 +17,9 @@ struct LeafConfig {
     uint64_t ils_iterations_per_node = 10;  // leaf ILS budget = this * leaf size
     uint64_t seed = 1;
     uint32_t threads = 1;                // leaves are independent: same result for any count
+    // Progress (GUI cluster map, M5.2): (KD-tree node index, state) with state 0 idle, 1 solving,
+    // 2 patching. Called from worker threads; observation only.
+    std::function<void(uint32_t, uint8_t)> on_cluster;
 };
 
 struct LeafStats {

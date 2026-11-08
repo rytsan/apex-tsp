@@ -28,13 +28,15 @@ struct Options {
     std::string report;             // .json
     uint32_t leaf_size = 800;       // scalable mode: KD-tree leaf cap (decomposition, heuristic)
     uint32_t leaf_exact_limit = 300;  // leaves this small use the exact mini B&C path
+    std::string ipc;                // GUI endpoint: socket path (Linux) / pipe name (Windows)
+    std::string shared_tour;        // mmap tour file for the GUI (default: <temp>/<endpoint name>.tour)
 };
 
 inline constexpr const char* kUsage =
     "usage: apex_tsp --instance <file.tsp> [--mode exact|scalable] [--time-limit <s>]\n"
     "                [--mem-limit-mb <n>] [--threads <n>] [--seed <n>] [--knn <n>]\n"
     "                [--out <route.tour>] [--checkpoint <dir>] [--resume] [--report <report.json>]\n"
-    "                [--leaf-size <n>] [--leaf-exact-limit <n>]\n";
+    "                [--leaf-size <n>] [--leaf-exact-limit <n>] [--ipc <endpoint>] [--shared-tour <file>]\n";
 
 namespace cli_detail {
 template <class T>
@@ -70,6 +72,8 @@ inline Options parse_cli(const std::vector<std::string>& args) {
         else if (f == "--report") o.report = value();
         else if (f == "--leaf-size") o.leaf_size = number<uint32_t>(f, value());
         else if (f == "--leaf-exact-limit") o.leaf_exact_limit = number<uint32_t>(f, value());
+        else if (f == "--ipc") o.ipc = value();
+        else if (f == "--shared-tour") o.shared_tour = value();
         else throw CliError("unknown flag '" + f + "'");
     }
     if (o.instance.empty()) throw CliError("--instance is required");

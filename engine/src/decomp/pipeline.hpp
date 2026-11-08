@@ -10,6 +10,7 @@
 //   then the tour edges join the candidate graph and the tour is the UB the exact mode starts from.
 
 #include <cstdint>
+#include <functional>
 
 #include "decomp/patching.hpp"
 #include "graph/candidate_graph.hpp"
@@ -34,6 +35,9 @@ struct PolishConfig {
     uint64_t iterations_per_node = 2; // per round, when no time limit (deterministic)
     uint64_t stall_per_node = 0;      // whole-tour ILS stops after stall_per_node * n idle iterations (0 = off)
     uint64_t seed = 1;
+    // Best tour so far (GUI / app checkpoint, M5.2): whole-tour mode passes it to the first ILS
+    // as on_best (throttled), parallel mode calls it after every round. Observation only.
+    std::function<void(const Tour&)> on_tour;
 };
 
 struct PolishStats {

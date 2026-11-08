@@ -40,6 +40,8 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
     };
     while (cfg.max_iterations == 0 || st.iterations < cfg.max_iterations) {
         if (stop && stop->load(std::memory_order_relaxed)) break;
+        pause_point();
+        if (cancel_requested()) break;
         if ((st.iterations & 15) == 0 && timed_out()) break;
         if (cfg.max_stall && st.iterations - last_improvement >= cfg.max_stall) break;
         ++st.iterations;

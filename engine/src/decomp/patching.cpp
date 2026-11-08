@@ -202,6 +202,7 @@ Tour decompose_and_patch(const Instance& inst, const CandidateGraph& g, const De
         parallel_for(level.size(), cfg.leaf.threads, [&](size_t i) {
             const size_t k = level[i];
             const auto& nd = tree[k];
+            if (cfg.leaf.on_cluster) cfg.leaf.on_cluster(static_cast<uint32_t>(k), 2);
             auto& a = cycles[static_cast<size_t>(nd.left)];
             auto& b = cycles[static_cast<size_t>(nd.right)];
             const int64_t parts = cost_of(a) + cost_of(b);
@@ -213,6 +214,7 @@ Tour decompose_and_patch(const Instance& inst, const CandidateGraph& g, const De
             a.clear();
             b.clear();
             cycles[k] = std::move(merged);
+            if (cfg.leaf.on_cluster) cfg.leaf.on_cluster(static_cast<uint32_t>(k), 0);
         });
         st.merges += static_cast<uint32_t>(level.size());
     }

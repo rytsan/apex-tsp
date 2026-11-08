@@ -5,6 +5,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <new>
 #include <optional>
 #include <random>
@@ -16,6 +17,7 @@
 #include "app/mem.hpp"
 #include "app/telemetry.hpp"
 #include "bnc/checkpoint.hpp"
+#include "core/control.hpp"
 #include "core/instance.hpp"
 #include "core/tour_io.hpp"
 #include "geo/hilbert.hpp"
@@ -23,6 +25,7 @@
 #include "bnc/tree.hpp"
 #include "decomp/pipeline.hpp"
 #include "hk/held_karp.hpp"
+#include "ipc/server.hpp"
 #include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
 
@@ -38,11 +41,95 @@ std::string fmt(double v, int prec = 3) {
     return b;
 }
 
-int run(const apex::Options& opt, apex::TelemetrySink& tel) {
+uint64_t dir_bytes(const std::string& dir) {
+    std::error_code ec;
+    uint64_t b = 0;
+    if (dir.empty() || !std::filesystem::exists(dir, ec)) return 0;
+    for (auto it = std::filesystem::recursive_directory_iterator(dir, ec); !ec && it != std::filesystem::recursive_directory_iterator();
+         it.increment(ec))
+        if (it->is_regular_file(ec)) b += it->file_size(ec);
+    return b;
+}
+
+std::string default_shared_tour(const std::string& endpoint) {
+    std::string name = std::filesystem::path(endpoint).filename().string();
+    if (const auto k = name.find_last_of("\\"); k != std::string::npos) name = name.substr(k + 1);  // pipe name
+    return (std::filesystem::temp_directory_path() / (name + ".tour")).string();
+}
+
+int run(const apex::Options& opt, apex::TelemetrySink& log) {
     const auto t0 = Clock::now();
     const uint64_t mem_limit = opt.mem_limit_mb << 20;
     const auto enf = apex::enforce_memory_limit(mem_limit);  // OS backstop; the guards below stop first
     const auto inst = apex::read_tsplib(opt.instance);
+
+    // GUI channel (M5.2). Observation hooks only: the latest tour is copied at most twice a second,
+    // for the SharedTour and for checkpoints requested over IPC.
+    std::mutex ck_mu;
+    apex::Tour latest;
+    std::string rng_snapshot;
+    double prior_wall = 0;
+    auto ck_last = Clock::time_point{};
+    std::unique_ptr<apex::ipc::IpcServer> ipc;
+    auto write_v1 = [&](const apex::Tour& t, const std::string& rng_state, double wall) {
+        apex::CheckpointV1 ck;
+        ck.instance_hash = apex::instance_hash(inst);
+        ck.instance_name = inst.name;
+        ck.mode = opt.mode;
+        ck.seed = opt.seed;
+        ck.knn = opt.knn;
+        ck.time_limit_s = opt.time_limit_s;
+        ck.rng_state = rng_state;
+        ck.wall_s = wall;
+        ck.best = t;
+        apex::write_checkpoint(opt.checkpoint, ck);
+    };
+    if (!opt.ipc.empty()) {
+        apex::ipc::ServerConfig sc;
+        sc.endpoint = opt.ipc;
+        sc.shared_tour_path = opt.shared_tour.empty() ? default_shared_tour(opt.ipc) : opt.shared_tour;
+        sc.tour_capacity = inst.n;
+        sc.hello.mode = opt.mode == "exact" ? 0 : 1;
+        sc.hello.mem_limit_mb = static_cast<uint32_t>(opt.mem_limit_mb);
+        sc.hello.threads = opt.threads;
+        sc.forward = &log;
+        sc.on_checkpoint = [&]() -> bool {
+            if (opt.checkpoint.empty()) return false;
+            std::lock_guard<std::mutex> lk(ck_mu);
+            if (latest.order.empty()) return false;
+            write_v1(latest, rng_snapshot, prior_wall + since(t0));
+            return true;
+        };
+        ipc = std::make_unique<apex::ipc::IpcServer>(sc);
+        if (!ipc->listening()) throw std::runtime_error("--ipc: cannot listen on " + opt.ipc);
+    }
+    apex::TelemetrySink& tel = ipc ? static_cast<apex::TelemetrySink&>(*ipc) : log;
+    auto on_tour = [&](const apex::Tour& t) {
+        std::lock_guard<std::mutex> lk(ck_mu);
+        const auto now = Clock::now();
+        if (now - ck_last < std::chrono::milliseconds(500)) return;
+        ck_last = now;
+        latest = t;
+        ipc->publish_tour(t, true);
+    };
+    auto phase = [&](const char* name, const apex::Tour& t, std::mt19937_64& r) {
+        tel.event("phase", {{"name", name}});
+        if (!ipc) return;
+        std::ostringstream rs;
+        rs << r;
+        std::lock_guard<std::mutex> lk(ck_mu);
+        rng_snapshot = rs.str();
+        if (!t.order.empty()) {
+            latest = t;
+            ipc->publish_tour(t, true);
+        }
+    };
+    uint64_t tours_found = 0;
+    int64_t last_ub = INT64_MAX;
+    auto count_ub = [&](int64_t ub) {
+        if (ub < last_ub) ++tours_found;
+        last_ub = std::min(last_ub, ub);
+    };
     tel.event("instance_loaded", {{"name", inst.name}, {"n", std::to_string(inst.n)},
                                   {"metric", apex::metric_name(inst.metric)}, {"ms", fmt(since(t0) * 1e3)}});
     tel.event("config", {{"mode", opt.mode}, {"seed", std::to_string(opt.seed)},
@@ -52,7 +139,6 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                          {"time_limit_s", fmt(opt.time_limit_s)}, {"knn", std::to_string(opt.knn)}});
 
     std::mt19937_64 rng(opt.seed);
-    double prior_wall = 0;
     apex::Tour tour;
     if (opt.resume) {
         const auto ck = apex::read_checkpoint(opt.checkpoint, inst);
@@ -65,14 +151,18 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
         tour = apex::hilbert_tour(inst, apex::hilbert_order(inst));
         tel.event("ub0", {{"source", "hilbert"}, {"ub", std::to_string(tour.cost)}, {"ms", fmt(since(t0) * 1e3)}});
     }
+    count_ub(tour.cost);
 
     // Graceful MEM_LIMIT (M4.5): guards at phase boundaries (RSS >= 90% of --mem-limit-mb) and
     // allocation failures under the OS cap both end in: best tour so far -> checkpoint + report.
     apex::Tour best = tour;
     std::string status = "done";
     std::optional<int64_t> lb;
+    apex::BnCResult bnc_result;
+    bool ran_bnc = false;
     try {
     apex::check_memory(mem_limit, "start");
+    phase("candidate_graph", tour, rng);
     const auto tg = Clock::now();
     auto g = apex::build_candidate_graph(inst, {opt.knn, true});
     apex::check_memory(mem_limit, "candidate_graph");
@@ -83,11 +173,13 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     // heuristic (M4.7): density clusters solved in parallel, merged level by level with
     // re-evaluation (or greedy + 2-opt for small n). UB only; no bound from this phase exists.
     if (!opt.resume) {
+        phase("construct", tour, rng);
         apex::DecompConfig dc;
         dc.max_leaf = opt.leaf_size;
         dc.leaf.exact_limit = opt.leaf_exact_limit;
         dc.leaf.threads = opt.threads;
         dc.leaf.seed = rng();
+        if (ipc && opt.mode == "scalable") dc.leaf.on_cluster = [&](uint32_t id, uint8_t s) { ipc->cluster_state(id, s); };
         apex::ConstructStats cs;
         auto dt = apex::construct_tour(inst, g, dc, &cs);
         const auto& ds = cs.decomp;
@@ -99,9 +191,11 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                                 {"ub", std::to_string(dt.cost)}, {"ms", fmt(cs.seconds * 1e3)}});
         if (dt.cost < tour.cost) tour = std::move(dt);
         best = tour;
+        count_ub(tour.cost);
         apex::check_memory(mem_limit, "construct");
     }
 
+    phase("two_opt", tour, rng);
     apex::TwoOptConfig cfg;
     cfg.seed = rng();
     if (opt.time_limit_s > 0) {
@@ -116,11 +210,13 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                           {"neighbors", std::to_string(st.final_neighbors)},
                           {"time_limit_hit", st.time_limit_hit ? "true" : "false"}, {"ms", fmt(since(tl) * 1e3)}});
     best = tour;
+    count_ub(tour.cost);
     apex::check_memory(mem_limit, "two_opt");
 
     // Held-Karp (M4.4): Lagrangian LB of the scalable mode (lb_source lagrangian); ascent gets
     // 10% of the remaining budget, the exact complete-graph 1-tree comes on top.
     if (opt.mode == "scalable" && opt.time_limit_s > 0) {
+        phase("held_karp", tour, rng);
         apex::HkConfig hc;
         hc.time_limit_s = 0.1 * (opt.time_limit_s - prior_wall - since(t0));
         if (hc.time_limit_s > 0) {
@@ -139,21 +235,25 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     const bool exact = opt.mode == "exact";
     const double left = opt.time_limit_s > 0 ? opt.time_limit_s - prior_wall - since(t0) : 0;
     if (exact || left > 0) {
+        phase("polish", tour, rng);
         apex::PolishConfig pc;
         pc.threads = opt.threads;
         pc.seed = rng();
         if (left > 0) pc.time_limit_s = exact ? 0.1 * left : left;
         if (exact) pc.stall_per_node = 50;  // warm-up ends when the ILS stops improving
+        if (ipc) pc.on_tour = on_tour;
         const auto ps = apex::polish_tour(tour, inst, g, pc);
         tel.event("polish", {{"heuristic", "true"}, {"ub", std::to_string(tour.cost)}, {"start", std::to_string(ps.start_cost)},
                              {"parallel", ps.parallel ? "true" : "false"}, {"segments", std::to_string(ps.segments)},
                              {"rounds", std::to_string(ps.rounds)}, {"iterations", std::to_string(ps.iterations)},
                              {"ms", fmt(ps.seconds * 1e3)}});
         best = tour;
+        count_ub(tour.cost);
         apex::check_memory(mem_limit, "polish");
     }
 
     if (exact) {  // branch-and-cut from the heuristic UB (Sprint 3 + M4.7 hand-off)
+        phase("bnc", tour, rng);
         const uint32_t added = apex::add_tour_edges(g, inst, tour);
         apex::BnCConfig bc;
         bc.parallel_lps = std::clamp<uint32_t>(opt.threads, 1, 6);
@@ -163,6 +263,11 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
         bc.mem_limit_bytes = mem_limit;
         bc.seed = opt.seed;
         bc.tour_path = opt.out;
+        if (ipc) bc.on_tour = [&](const apex::Tour& t) {
+            std::lock_guard<std::mutex> lk(ck_mu);
+            latest = t;
+            ipc->publish_tour(t, true);
+        };
         if (opt.time_limit_s > 0) bc.time_limit_s = std::max(0.0, opt.time_limit_s - prior_wall - since(t0));
         if (!opt.checkpoint.empty()) {
             bc.checkpoint_dir = opt.checkpoint + "/bnc";
@@ -182,6 +287,10 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
         if (bg) bg->stop();
         tour = r.best;
         lb = r.lb_int;
+        tours_found += r.ub_improvements;
+        last_ub = std::min(last_ub, tour.cost);
+        bnc_result = r;
+        ran_bnc = true;
         status = r.status == apex::BnCResult::Status::MemLimit ? "MEM_LIMIT" : apex::status_name(r.status);
     }
 
@@ -196,26 +305,21 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
                                 {"limit_bytes", std::to_string(mem_limit)}, {"ub", std::to_string(tour.cost)}});
     }
 
+    if (status == "done" && apex::cancel_requested()) status = "CANCELLED";
     if (apex::tour_cost(inst, tour) != tour.cost) throw std::runtime_error("internal error: tour cost drift");
 
     const double wall = prior_wall + since(t0);
     if (!opt.out.empty()) apex::write_tour_file(opt.out, inst, tour, "APEX-TSP length " + std::to_string(tour.cost));
     if (!opt.checkpoint.empty()) {
-        apex::CheckpointV1 ck;
-        ck.instance_hash = apex::instance_hash(inst);
-        ck.instance_name = inst.name;
-        ck.mode = opt.mode;
-        ck.seed = opt.seed;
-        ck.knn = opt.knn;
-        ck.time_limit_s = opt.time_limit_s;
         std::ostringstream rs;
         rs << rng;
-        ck.rng_state = rs.str();
-        ck.wall_s = wall;
-        ck.best = tour;
-        apex::write_checkpoint(opt.checkpoint, ck);
+        {
+            std::lock_guard<std::mutex> lk(ck_mu);
+            write_v1(tour, rs.str(), wall);
+        }
         tel.event("checkpoint_written", {{"dir", opt.checkpoint}});
     }
+    if (ipc) ipc->publish_tour(tour, true);
     apex::Report rep;
     rep.instance = inst.name;
     rep.mode = opt.mode;
@@ -225,16 +329,30 @@ int run(const apex::Options& opt, apex::TelemetrySink& tel) {
     rep.ram_peak_bytes = apex::peak_rss_bytes();
     rep.status = status;
     rep.threads = opt.threads;
+    rep.disk_bytes = dir_bytes(opt.checkpoint);
+    rep.tours_found = tours_found;
+    rep.hardware = apex::hardware_string();
+    rep.mem_limit_mb = opt.mem_limit_mb;
+    if (ran_bnc) {
+        rep.iterations = bnc_result.lp_iterations;
+        rep.refactorizations = bnc_result.refactorizations;
+        rep.cuts_sec = bnc_result.cuts_sec;
+        rep.cuts_blossom = bnc_result.cuts_blossom;
+        rep.cuts_component = bnc_result.cuts_component;
+        rep.verification_rounds = bnc_result.verification_pricing_calls;
+    }
     const char* lb_source = opt.mode == "exact" ? "lp" : "lagrangian";
     if (lb) {
         rep.lb = *lb;
         rep.lb_source = lb_source;
     }
+    const std::string report = apex::report_json(rep);
     if (!opt.report.empty()) apex::write_report_file(opt.report, rep);
     tel.event("done", {{"status", status}, {"mode", opt.mode}, {"ub", std::to_string(tour.cost)}, {"lb", lb ? std::to_string(*lb) : "null"},
                        {"gap_pct", lb ? fmt(100.0 * (tour.cost - *lb) / tour.cost, 4) : "null"},
                        {"lb_source", lb ? lb_source : "null"}, {"wall_s", fmt(wall)},
                        {"ram_peak_bytes", std::to_string(rep.ram_peak_bytes)}});
+    if (ipc) ipc->finish(report);  // FINISHED = the --report bytes
     return status == "MEM_LIMIT" ? 4 : 0;
 }
 

@@ -3,6 +3,7 @@
 #include "bnc/rcf.hpp"
 #include "app/mem.hpp"
 #include "bnc/checkpoint.hpp"
+#include "core/control.hpp"
 #include "core/serial.hpp"
 #include "core/tour_io.hpp"
 #include "primal/lk_lite.hpp"
@@ -47,6 +48,7 @@ const char* status_name(BnCResult::Status s) {
         case BnCResult::Status::TimeLimit: return "TIME_LIMIT";
         case BnCResult::Status::NodeLimit: return "NODE_LIMIT";
         case BnCResult::Status::MemLimit: return "MEM_LIMIT";
+        case BnCResult::Status::Cancelled: return "CANCELLED";
     }
     return "?";
 }
@@ -102,6 +104,7 @@ struct NodeOutcome {
     double lp_s = 0, sep_s = 0, pricing_s = 0, heuristic_s = 0;
     uint64_t dive_calls = 0, dive_tours = 0, dive_pivots = 0;
     uint64_t peak_factor_nnz = 0, lp_nnz = 0;  // memory budget inputs
+    uint64_t lp_iterations = 0, refactorizations = 0, cuts_sec = 0, cuts_blossom = 0, cuts_component = 0;
     uint64_t pricing_calls = 0, priced = 0, heuristic_calls = 0, strong_pivots = 0, strong_candidates = 0, rcf_node_fixings = 0;
 };
 
@@ -114,6 +117,11 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
     o.pricing_s += r.pricing_s;
     o.pricing_calls += r.pricing_calls;
     o.priced += r.priced_edges;
+    o.lp_iterations += r.lp_iterations;
+    o.refactorizations += r.refactorizations;
+    o.cuts_sec += r.cuts_sec;
+    o.cuts_blossom += r.cuts_blossom;
+    o.cuts_component += r.cuts_component;
     if (r.infeasible) { o.kind = NodeOutcome::Kind::Infeasible; return; }
     if (r.cutoff) { o.kind = NodeOutcome::Kind::Pruned; return; }
     bool tour = false;
@@ -281,8 +289,11 @@ public:
             root();
         }
         last_ckpt_ = Clock::now();
-        bool timed_out = false, mem_limited = false;
+        bool timed_out = false, mem_limited = false, cancelled = false;
         while (!open_.empty()) {
+            pause_point();
+            if (cancel_requested()) { cancelled = true; break; }
+            if (engine_control().take_checkpoint_request() && !cfg_.checkpoint_dir.empty()) save();
             if (elapsed() > cfg_.time_limit_s) { timed_out = true; break; }
             if (out_.nodes >= cfg_.max_nodes) break;
             poll_primal();
@@ -299,6 +310,7 @@ public:
         out_.lb_int = static_cast<int64_t>(std::ceil(out_.lb - 1e-6));
         out_.status = open_.empty() ? BnCResult::Status::Optimal
                       : mem_limited ? BnCResult::Status::MemLimit
+                      : cancelled ? BnCResult::Status::Cancelled
                       : (timed_out ? BnCResult::Status::TimeLimit : BnCResult::Status::NodeLimit);
         out_.max_concurrent_lps = budget_.max_concurrent();
         out_.lp_budget_violations = budget_.violations();
@@ -544,6 +556,11 @@ private:
         out_.heuristic_s += o.heuristic_s;
         out_.verification_pricing_calls += o.pricing_calls;
         out_.priced_columns += o.priced;
+        out_.lp_iterations += o.lp_iterations;
+        out_.refactorizations += o.refactorizations;
+        out_.cuts_sec += o.cuts_sec;
+        out_.cuts_blossom += o.cuts_blossom;
+        out_.cuts_component += o.cuts_component;
         out_.heuristic_calls += o.heuristic_calls;
         out_.dive_calls += o.dive_calls;
         out_.dive_tours += o.dive_tours;
@@ -583,6 +600,7 @@ private:
         rcf_pending_ = true;
         if (!cfg_.tour_path.empty())
             write_tour_file(cfg_.tour_path, inst_, out_.best, "apex_tsp " + std::string(source) + " ub " + std::to_string(out_.ub));
+        if (cfg_.on_tour) cfg_.on_tour(out_.best);
         if (tel_) tel_->event("ub_improved", {{"nodes", std::to_string(out_.nodes)}, {"ub", std::to_string(out_.ub)}, {"source", source},
                                              {"heuristic", std::string(source) == "lp_integral" ? "false" : "true"}});
     }
