@@ -224,5 +224,6 @@ TEST_CASE("T_seqlock_reader_consistent") {
     CHECK(last_epoch % 2 == 0);
     rf.reset();
     mf.reset();
-    fs::remove(path);
+    std::error_code ec;
+    fs::remove(path, ec);  // Windows may still hold the just-unmapped file
 }

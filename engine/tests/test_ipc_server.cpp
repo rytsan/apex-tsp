@@ -120,8 +120,10 @@ TEST_CASE("T_control_cancel") {
 
 // Live control loop (G5.2) + FINISHED == --report bytes, against a running apex_tsp.
 TEST_CASE("T_control_live_and_T_finished_matches_report_file") {
-    const fs::path dir = fs::temp_directory_path() / "apex_tsp_ipc_live";
-    fs::remove_all(dir);
+    // Unique per run; cleanup ignores errors (Windows may hold a just-unmapped file for a moment).
+    const fs::path dir = fs::temp_directory_path() / ("apex_tsp_ipc_live_" + std::to_string(Clock::now().time_since_epoch().count()));
+    std::error_code ec;
+    fs::remove_all(dir, ec);
     fs::create_directories(dir);
 #ifdef _WIN32
     const std::string endpoint = "apex_tsp_ipc_live_test";
@@ -239,5 +241,5 @@ TEST_CASE("T_control_live_and_T_finished_matches_report_file") {
     CHECK(fin.find("\"hardware\":") != std::string::npos);
     CHECK(rc == 0);
     t.reset();
-    fs::remove_all(dir);
+    fs::remove_all(dir, ec);
 }
