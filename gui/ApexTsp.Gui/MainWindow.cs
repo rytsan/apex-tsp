@@ -270,6 +270,7 @@ public sealed partial class MainWindow : Window
             new TabItem { Header = "Solve", Content = solve },
             new TabItem { Header = "Heuristics lab", Content = BuildLabTab() },
             new TabItem { Header = "Editor", Content = BuildEditorTab() },
+            new TabItem { Header = "Benchmarks", Content = BuildCampaignTab() },
             new TabItem { Header = "Runs", Content = runsGrid },
             new TabItem { Header = "Log", Content = logPanel },
         };
@@ -382,6 +383,9 @@ public sealed partial class MainWindow : Window
         else if (_opt.DemoApp is not null) StartAppDemo();
         else if (_opt.DemoLab is not null) StartLabDemo();
         RefreshRuns();
+        if (_opt.Tab is { } tab && _tabs.ItemsSource is TabItem[] items)
+            for (var k = 0; k < items.Length; ++k)
+                if (string.Equals((items[k].Header as string)?.Split(' ')[0], tab, StringComparison.OrdinalIgnoreCase)) _tabs.SelectedIndex = k;
     }
 
     public bool OpenInstance(string path)
@@ -496,15 +500,18 @@ public sealed partial class MainWindow : Window
 
     private void StartRun() => StartRun(null);
 
-    private void StartRun(RunSettings? labSettings)
+    private void StartRun(RunSettings? labSettings) => StartRun(labSettings, null);
+
+    // runDir: campaign runs write into the campaign folder instead of the app history.
+    private bool StartRun(RunSettings? labSettings, string? runDir)
     {
-        if (_inst is null) { Toast("open an instance first"); return; }
-        if (_run is { Running: true }) { Toast("a run is already active"); return; }
+        if (_inst is null) { Toast("open an instance first"); return false; }
+        if (_run is { Running: true }) { Toast("a run is already active"); return false; }
         var s = labSettings ?? ReadForm();
-        if (s.Validate() is { } why) { _settingsError.Text = why; _settingsError.Foreground = _pal.Brush(_pal.Danger); return; }
+        if (s.Validate() is { } why) { _settingsError.Text = why; _settingsError.Foreground = _pal.Brush(_pal.Danger); return false; }
         _settingsError.Text = "";
         var engine = EngineLocator.Find(_settings.EnginePath);
-        if (engine is null) { _ = LocateEngine(); return; }
+        if (engine is null) { _ = LocateEngine(); return false; }
         _settings.EnginePath = engine;
         if (labSettings is null) { _settings.Run = s.Clone(); SaveSettings(); }
         _run?.Dispose();
@@ -512,16 +519,19 @@ public sealed partial class MainWindow : Window
         ResetTours();
         _logItems.Clear();
         _runSettings = s;
-        var dir = _store.NewRunDir(_inst.Path, out _runId);
+        string dir;
+        if (runDir is null) dir = _store.NewRunDir(_inst.Path, out _runId);
+        else { Directory.CreateDirectory(runDir); dir = runDir; _runId = Path.GetFileName(runDir); }
         try { _run = RunSession.Launch(engine, _inst.Path, s, dir); }
         catch (Exception e) when (e is IOException or System.ComponentModel.Win32Exception)
         {
             Toast("cannot start the engine: " + e.Message);
-            return;
+            return false;
         }
         WireSession(_run);
         _run.ConnectAsync(TimeSpan.FromSeconds(60));
         Toast($"run {_runId} started: {s.Mode}, {s.TimeLimitS} s, {s.Threads} threads");
+        return true;
     }
 
     private void AttachRun()
@@ -547,7 +557,7 @@ public sealed partial class MainWindow : Window
             });
             c.TourUpdate += (_, _) => ReadTour(s);
             c.Finished += j => Dispatcher.UIThread.Post(() => OnFinished(s, j));
-            c.Closed += r => Dispatcher.UIThread.Post(() => _vm.OnClosed(r));
+            c.Closed += r => Dispatcher.UIThread.Post(() => { _vm.OnClosed(r); CampaignOnClosed(s, r); });
             c.SolverEvent += e => Dispatcher.UIThread.Post(() =>
             {
                 _vm.OnSolverEvent(e);
@@ -569,7 +579,7 @@ public sealed partial class MainWindow : Window
             });
         };
         s.Acked += t => Dispatcher.UIThread.Post(() => _vm.OnAck(t));
-        s.Failed += why => Dispatcher.UIThread.Post(() => _vm.OnClosed(why));
+        s.Failed += why => Dispatcher.UIThread.Post(() => { _vm.OnClosed(why); CampaignOnClosed(s, why); });
     }
 
     private void OnLp(RunSession s, LpSegment[] seg)
@@ -640,11 +650,12 @@ public sealed partial class MainWindow : Window
     {
         _vm.OnFinished(json);
         ReadTour(s);
-        if (_inst is not null)
+        if (_inst is not null && !CampaignOwns(s))
         {
             AppStore.SaveRecord(s.RunDir, _vm.ToRecord(_runId, _inst.Path, _inst.Name, s.Started, _runSettings));
             RefreshRuns();
         }
+        CampaignOnFinished(s, json);
         Toast($"run {_runId}: {_vm.Status}, UB {MainViewModel.Fmt(_vm.UpperBound)}");
         if (_opt.DemoOut is not null) DispatcherTimer.RunOnce(FinishDemo, TimeSpan.FromMilliseconds(800));
         DemoAppOnFinished();

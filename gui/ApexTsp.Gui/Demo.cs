@@ -184,7 +184,7 @@ public sealed partial class MainWindow
                 }
                 break;
             case 5:  // history tab
-                _tabs.SelectedIndex = 3;  // Runs
+                _tabs.SelectedIndex = 4;  // Runs
                 RefreshRuns();
                 _runs.SelectedIndex = 0;
                 Check(_runList.Count >= 1 && _runList[0].Dir == _appRunDir, $"history lists the run first ({_runList.Count} runs)");

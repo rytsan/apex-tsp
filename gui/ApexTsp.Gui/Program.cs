@@ -16,6 +16,7 @@ public sealed class GuiOptions
     public string? DemoApp;         // G6.2 script: open, configure, run, pause/resume, save tour, reload from history
     public string? DemoLab;         // G6.4 script: every lab heuristic through the app, then an edited instance solved exact
     public string? Home;            // settings + history folder (default $APEX_TSP_HOME or local app data)
+    public string? Tab;             // tab shown at start (solve, lab, editor, benchmarks, runs, log)
     public List<string> EngineArgs = [];
 
     public const string Usage =
@@ -39,6 +40,7 @@ public sealed class GuiOptions
                 case "--demo-app": o.DemoApp = Value(); break;
                 case "--demo-lab": o.DemoLab = Value(); break;
                 case "--home": o.Home = Value(); break;
+                case "--tab": o.Tab = Value(); break;
                 case "--": o.EngineArgs.AddRange(args[(i + 1)..]); i = args.Length; break;
                 default:
                     if (args[i].StartsWith("--", StringComparison.Ordinal) || o.Instance is not null)

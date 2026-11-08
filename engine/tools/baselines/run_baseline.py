@@ -57,14 +57,22 @@ def tour_length(tour, xs, ys, ceil):
     return total
 
 
+STREAM = False  # --stream: echo the solver's output live (line buffered) to stdout
+
+
 def run(cmd, cwd, limit):
     """-> (returncode | None on timeout, stdout text, wall s, peak RSS bytes)."""
     t0 = time.monotonic()
+    if shutil.which("stdbuf"):
+        cmd = ["stdbuf", "-oL", "-eL"] + cmd  # the solvers use stdio: line buffering for live output
     with open(os.path.join(cwd, "solver.log"), "w") as log:
         p = subprocess.Popen(cmd, cwd=cwd, stdout=log, stderr=subprocess.STDOUT)
         timed_out = False
+        shown = 0
         while True:
             pid, status, ru = os.wait4(p.pid, os.WNOHANG)
+            if STREAM:
+                shown = echo(os.path.join(cwd, "solver.log"), shown)
             if pid:
                 break
             if limit and time.monotonic() - t0 > limit:
@@ -73,9 +81,21 @@ def run(cmd, cwd, limit):
                 timed_out = True
                 break
             time.sleep(0.05)
+    if STREAM:
+        echo(os.path.join(cwd, "solver.log"), shown)
     wall = time.monotonic() - t0
     out = open(os.path.join(cwd, "solver.log"), errors="replace").read()
     return (None if timed_out else os.waitstatus_to_exitcode(status)), out, wall, ru.ru_maxrss * 1024
+
+
+def echo(path, shown):
+    with open(path, errors="replace") as f:
+        f.seek(shown)
+        chunk = f.read()
+    if chunk:
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
+    return shown + len(chunk.encode(errors="replace"))
 
 
 def concorde(inst, limit, seed, work):
@@ -131,7 +151,11 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--report", required=True)
     ap.add_argument("--keep", help="directory for the solver's files (default: temporary)")
+    ap.add_argument("--tour-out", help="write the solver's tour here (TSPLIB .tour)")
+    ap.add_argument("--stream", action="store_true", help="echo the solver's output live")
     a = ap.parse_args()
+    global STREAM
+    STREAM = a.stream
     if not os.access(BIN[a.solver], os.X_OK):
         sys.exit(f"{BIN[a.solver]} not built: run engine/tools/baselines/build_baselines.sh")
     name, xs, ys, ceil = read_instance(a.instance)
@@ -152,6 +176,10 @@ def main():
            "ub_matches_solver": ub is not None and r["solver_ub"] is not None and abs(ub - r["solver_ub"]) < 0.5}
     with open(a.report, "w") as f:
         json.dump(rep, f)
+    if a.tour_out and valid:
+        with open(a.tour_out, "w") as f:
+            f.write(f"NAME : {name}.{a.solver}.tour\nCOMMENT : {a.solver} length {ub}\nTYPE : TOUR\nDIMENSION : {len(tour)}\nTOUR_SECTION\n")
+            f.write("".join(f"{v + 1}\n" for v in tour) + "-1\nEOF\n")
     if not a.keep:
         shutil.rmtree(work, ignore_errors=True)
     print(json.dumps(rep))
