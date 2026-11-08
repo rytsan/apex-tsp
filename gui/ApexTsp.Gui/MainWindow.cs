@@ -801,6 +801,13 @@ public sealed partial class MainWindow : Window
             var sc = _map.Scene;
             _instDetails.Text = string.Create(CultureInfo.InvariantCulture,
                 $"{i.Dimension} nodes · {i.EdgeWeightType}\n{(sc is null ? "" : $"x {sc.MinX:0.##} .. {sc.MaxX:0.##}, y {sc.MinY:0.##} .. {sc.MaxY:0.##}\n")}{i.Comment}\n{i.Path}");
+            if (ReferenceTable.Load().TryGetValue(i.Name, out var refRow))
+            {
+                _instDetails.Text += "\n\n" + refRow.Summary();
+                if (!double.IsNaN(vm.UpperBound))
+                    _instDetails.Text += string.Create(CultureInfo.InvariantCulture,
+                        $"\ncurrent UB vs {(refRow.Kind == "optimal" ? "optimum" : "best known tour")}: {100.0 * (vm.UpperBound - refRow.Value) / refRow.Value:+0.0000;-0.0000}%");
+            }
         }
         else
         {

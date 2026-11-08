@@ -240,3 +240,80 @@ public sealed class AppStore
         File.Move(tmp, path, overwrite: true);
     }
 }
+
+// engine/tools/history/reference.csv (M6.5): known value + history of an instance, for the
+// instance summary. Read-only; columns by header name.
+public sealed record ReferenceRow(string Instance, long Value, string Kind, string Year, string SolvedBy,
+                                  string Concorde99, string Concorde03, string Note)
+{
+    public string Summary()
+    {
+        var v = Kind == "optimal" ? $"optimum {Value} (TSPLIB)" : $"best known tour {Value} (not proven optimal)";
+        var parts = new List<string> { v };
+        if (Year.Length > 0) parts.Add($"first solved {Year} by {SolvedBy}");
+        if (Concorde99.Length > 0) parts.Add($"Concorde 1999: {Concorde99} s (500 MHz Alpha)");
+        if (Concorde03.Length > 0) parts.Add($"Concorde 2003: {Concorde03} s (2.8 GHz Xeon)");
+        if (Note.Length > 0) parts.Add(Note);
+        return string.Join("\n", parts);
+    }
+}
+
+public static class ReferenceTable
+{
+    private static Dictionary<string, ReferenceRow>? _rows;
+
+    public static string? Locate()
+    {
+        foreach (var start in new[] { AppContext.BaseDirectory, Environment.CurrentDirectory })
+            for (var d = new DirectoryInfo(start); d is not null; d = d.Parent)
+            {
+                var p = Path.Combine(d.FullName, "engine", "tools", "history", "reference.csv");
+                if (File.Exists(p)) return p;
+            }
+        return null;
+    }
+
+    public static Dictionary<string, ReferenceRow> Load(string? path = null)
+    {
+        if (_rows is not null && path is null) return _rows;
+        var rows = new Dictionary<string, ReferenceRow>(StringComparer.Ordinal);
+        path ??= Locate();
+        if (path is null) return _rows = rows;
+        var lines = File.ReadAllLines(path);
+        var head = SplitCsv(lines[0]);
+        int Col(string n) => Array.IndexOf(head, n);
+        foreach (var line in lines.Skip(1))
+        {
+            var f = SplitCsv(line);
+            string G(string n) => Col(n) is var i and >= 0 && i < f.Length ? f[i] : "";
+            if (!long.TryParse(G("value"), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)) continue;
+            var c99 = G("concorde99_raw");
+            rows[G("instance")] = new ReferenceRow(G("instance"), v, G("value_kind"), G("year_solved"), G("solved_by"),
+                c99, G("concorde03_s"), G("note"));
+        }
+        return path == Locate() ? _rows = rows : rows;
+    }
+
+    // Minimal RFC 4180 field split (quotes, doubled quotes).
+    public static string[] SplitCsv(string line)
+    {
+        var f = new List<string>();
+        var sb = new StringBuilder();
+        var q = false;
+        for (var i = 0; i < line.Length; ++i)
+        {
+            var c = line[i];
+            if (q)
+            {
+                if (c == '"' && i + 1 < line.Length && line[i + 1] == '"') { sb.Append('"'); ++i; }
+                else if (c == '"') q = false;
+                else sb.Append(c);
+            }
+            else if (c == '"') q = true;
+            else if (c == ',') { f.Add(sb.ToString()); sb.Clear(); }
+            else sb.Append(c);
+        }
+        f.Add(sb.ToString());
+        return [.. f];
+    }
+}

@@ -580,3 +580,22 @@ public class LabAndEditorTests
         dir.Delete(true);
     }
 }
+
+public class ReferenceTests
+{
+    [Fact]
+    public void T_reference_table_loads()
+    {
+        var path = Path.Combine(Repo.Root, "engine", "tools", "history", "reference.csv");
+        var rows = ReferenceTable.Load(path);
+        Assert.True(rows.Count >= 50);
+        Assert.Equal(259045, rows["pr1002"].Value);
+        Assert.Equal("optimal", rows["pr1002"].Kind);
+        Assert.Equal("1987", rows["pr2392"].Year);
+        Assert.Contains("Padberg", rows["pr2392"].SolvedBy);
+        Assert.Equal("best_known_tour", rows["mona-lisa100K"].Kind);
+        Assert.Contains("not proven optimal", rows["mona-lisa100K"].Summary());
+        Assert.DoesNotContain("optimum", rows["mona-lisa100K"].Summary().Split('\n')[0]);
+        Assert.Equal(["a", "b,c", "d\"e", ""], ReferenceTable.SplitCsv("a,\"b,c\",\"d\"\"e\","));
+    }
+}

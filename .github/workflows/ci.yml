@@ -90,6 +90,9 @@ jobs:
           cmake --preset dev-gcc
           cmake --build --preset dev-gcc --target engine
 
+      - name: Reference table (sources, manifest)
+        run: python3 engine/tools/history/test_reference.py
+
       - name: Test GUI
         working-directory: gui
         run: dotnet test ApexTsp.Tests -c Release --logger "console;verbosity=normal"
