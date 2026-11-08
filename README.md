@@ -321,7 +321,7 @@ Final results (gap vs reference = (UB - ref) / ref; certified gap = (UB - LB) / 
 |---|---|---|---|---|---|---|---|---|
 | eil51 / berlin52 / a280 | exact | 5 | 0.1 / 0.1 / 0.5 s | 426 / 7542 / 2579 | 0 | = UB (LP) | 0, OPTIMAL_PROVEN | 5-8 MB |
 | pr1002 | exact | 5 | 1349.2 s | 259045 | 0 | 259045 (LP) | 0, OPTIMAL_PROVEN | 557 MB |
-| fl3795 | exact | 5 | 3651.9 s (limit 3600) | 28927 | 0.535% vs 28772 | 28587 (LP) | 1.1754%, not proven | 3137 MB |
+| fl3795 | exact | 5 | 3651.9 s (limit 3600) | 28927 | 0.539% vs 28772 | 28587 (LP) | 1.1754%, not proven | 3137 MB |
 | pla85900 | scalable | 5 | 600 s | 143356450 | 0.684% vs optimum | 141629726 (HK) | 1.2045% | 77 MB |
 | mona-lisa100K | scalable | 5 | 600 s | 5764550 | 0.128% vs 5757191 (best known tour) | 5750673 (HK) | 0.2407% | 87 MB |
 | mona-lisa100K | scalable | 1 | 2700 s | 5765259 | 0.140% vs 5757191 (best known tour) | 5751055 (HK) | 0.2464% | 54 MB |
