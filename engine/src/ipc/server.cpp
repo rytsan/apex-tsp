@@ -26,7 +26,7 @@ bool parse_double(std::string_view s, double& out) {
 // Phase ids of the TELEMETRY packet (event "phase" from the app).
 uint32_t phase_id(std::string_view name) {
     static constexpr std::string_view names[] = {"load", "candidate_graph", "construct", "two_opt",
-                                                 "held_karp", "polish", "bnc", "done"};
+                                                 "held_karp", "polish", "bnc", "done", "lab"};
     for (uint32_t k = 0; k < std::size(names); ++k)
         if (names[k] == name) return k;
     return UINT32_MAX;

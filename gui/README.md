@@ -22,7 +22,7 @@ App (Sprint 6 M6.2): toolbar Open (Ctrl+O, drag and drop, Recent), Start (F5), P
 Resume (F7), Cancel (Shift+F5), Checkpoint, Save tour (Ctrl+S, TSPLIB `.tour`), Export (map PNG,
 tour SVG, report JSON), theme (system / light / dark). Tabs: **Solve** (map, instance summary, run
 settings: mode, time limit, threads, seed, memory ceiling, checkpoint dir, resume; bounds, chart,
-final report; below the map: bounds over time with event markers, cuts per round, live branch-and-cut tree; provenance badges and colors: orange heuristic, blue LP, purple Lagrangian, green proven; map layers tour / nodes / LP support / new LP edges / clusters), **Runs** (history of the instance or of all instances; double click reloads the
+final report; below the map: bounds over time with event markers, cuts per round, live branch-and-cut tree; provenance badges and colors: orange heuristic, blue LP, purple Lagrangian, green proven; map layers tour / nodes / LP support / new LP edges / clusters), **Heuristics lab** (engine in `--mode lab`: Nearest neighbor, Greedy edge, Space-filling curve, Random, Decomposition replace the tour; 2-opt, 2-opt + Or-opt, LK, ILS improve it; chains such as `greedy two_opt_oropt lk ils 5`; steps table with before / after / delta / time), **Editor** (click to add, drag to move, right click to delete; generate uniform / clustered / grid; EUC_2D or CEIL_2D; save `.tsp`, open in Solve or solve exact now), **Runs** (history of the instance or of all instances; double click reloads the
 tour, bounds and report), **Log** (colored by category: heuristic, LP, cuts, tree, system; text and category filters).
 
 Engine binary: `--engine`, else the last one used (settings), `$APEX_TSP_ENGINE`, next to the GUI,
@@ -33,4 +33,5 @@ the user's local app data folder, `apex-tsp/`): `settings.json` and
 Map: drag = pan, wheel = zoom, double click = fit. Scripts (evidence): `--demo-out <dir> -- <engine
 args>` (G5.3: pan/zoom, LOD screenshots, `frame_stats.txt`), `--demo-app <dir> [-- <engine args>]`
 (G6.2: configure, run, pause / resume, save tour, reload from history, dark theme; `app_demo.log`
-with PASS/FAIL lines). Under WSL use `DISPLAY=:0`.
+with PASS/FAIL lines), `--demo-lab <dir>` (G6.4: every lab heuristic through the app, then an instance
+made in the editor solved exact; `lab_demo.log`). Under WSL use `DISPLAY=:0`.

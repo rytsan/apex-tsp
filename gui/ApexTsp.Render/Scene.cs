@@ -19,6 +19,32 @@ public sealed class Scene
     public double[]? YD { get; init; }
     public bool Ceil2D { get; init; }
 
+    public long Dist(uint a, uint b)
+    {
+        double dx = XD is null ? X[a] - X[b] : XD[a] - XD[b], dy = YD is null ? Y[a] - Y[b] : YD[a] - YD[b];
+        var d = Math.Sqrt(dx * dx + dy * dy);
+        return Ceil2D ? (long)Math.Ceiling(d) : (long)Math.Floor(d + 0.5);
+    }
+
+    // Tour neighbours of a node (position index rebuilt when the tour changes).
+    private int[] _pos = [];
+    private uint[]? _posTour;
+
+    public (uint Prev, uint Next)? TourNeighbors(uint node)
+    {
+        var m = Math.Min(TourCount, Tour.Length);
+        if (m < 3 || node >= Count) return null;
+        if (!ReferenceEquals(_posTour, Tour))
+        {
+            if (_pos.Length != Count) _pos = new int[Count];
+            Array.Fill(_pos, -1);
+            for (var i = 0; i < m; ++i) if (Tour[i] < Count) _pos[Tour[i]] = i;
+            _posTour = Tour;
+        }
+        var k = _pos[node];
+        return k < 0 ? null : (Tour[(k + m - 1) % m], Tour[(k + 1) % m]);
+    }
+
     public long TourLength(ReadOnlySpan<uint> t)
     {
         long sum = 0;

@@ -9,7 +9,7 @@
 
 namespace apex {
 
-Tour lp_guided_tour(const Instance& inst, const CandidateGraph& g, const std::vector<double>& x) {
+Tour lp_guided_tour(const Instance& inst, const CandidateGraph& g, const std::vector<double>& x, bool local_search) {
     const uint32_t n = inst.n;
     std::vector<uint32_t> parent(n), deg(n, 0);
     std::iota(parent.begin(), parent.end(), 0u);
@@ -85,7 +85,7 @@ Tour lp_guided_tour(const Instance& inst, const CandidateGraph& g, const std::ve
         }
     }
     t.cost = tour_cost(inst, t);
-    two_opt_oropt(t, inst, g, TwoOptConfig{});
+    if (local_search) two_opt_oropt(t, inst, g, TwoOptConfig{});
     return t;
 }
 

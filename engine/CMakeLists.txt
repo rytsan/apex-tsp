@@ -34,6 +34,7 @@ add_library(apex_core STATIC
     src/graph/candidate_graph.cpp
     src/primal/two_opt.cpp
     src/primal/lp_tour.cpp
+    src/primal/lab.cpp
     src/primal/lk_lite.cpp
     src/bnc/primal_heur.cpp
     src/decomp/kdtree.cpp
@@ -103,7 +104,8 @@ add_executable(engine_tests
     tests/test_mem.cpp
     tests/test_ipc_protocol.cpp
     tests/test_ipc_server.cpp
-    tests/test_ipc_v3.cpp)
+    tests/test_ipc_v3.cpp
+    tests/test_lab.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}" APEX_BIN="$<TARGET_FILE:engine>")
 add_dependencies(engine_tests engine)

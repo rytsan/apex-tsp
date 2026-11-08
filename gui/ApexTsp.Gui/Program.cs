@@ -14,12 +14,13 @@ public sealed class GuiOptions
     public string? SharedTour;
     public string? DemoOut;         // G5.3 script: start, pan/zoom, screenshots, frame stats, exit after FINISHED
     public string? DemoApp;         // G6.2 script: open, configure, run, pause/resume, save tour, reload from history
+    public string? DemoLab;         // G6.4 script: every lab heuristic through the app, then an edited instance solved exact
     public string? Home;            // settings + history folder (default $APEX_TSP_HOME or local app data)
     public List<string> EngineArgs = [];
 
     public const string Usage =
         "usage: ApexTsp.Gui [<file.tsp>] [--instance <file.tsp>] [--engine <apex_tsp>] [--home <dir>]\n" +
-        "                   [--attach <endpoint> --shared-tour <file>] [--demo-out <dir> -- <engine args>] [--demo-app <dir>]";
+        "                   [--attach <endpoint> --shared-tour <file>] [--demo-out <dir> -- <engine args>] [--demo-app <dir>] [--demo-lab <dir>]";
 
     public static GuiOptions Parse(string[] args)
     {
@@ -36,6 +37,7 @@ public sealed class GuiOptions
                 case "--shared-tour": o.SharedTour = Value(); break;
                 case "--demo-out": o.DemoOut = Value(); break;
                 case "--demo-app": o.DemoApp = Value(); break;
+                case "--demo-lab": o.DemoLab = Value(); break;
                 case "--home": o.Home = Value(); break;
                 case "--": o.EngineArgs.AddRange(args[(i + 1)..]); i = args.Length; break;
                 default:
@@ -46,7 +48,7 @@ public sealed class GuiOptions
             }
         }
         if (o.Attach is not null && o.SharedTour is null) throw new ArgumentException("--attach needs --shared-tour");
-        if ((o.DemoOut ?? o.DemoApp) is not null && o.Instance is null) throw new ArgumentException("demo scripts need an instance");
+        if ((o.DemoOut ?? o.DemoApp ?? o.DemoLab) is not null && o.Instance is null) throw new ArgumentException("demo scripts need an instance");
         return o;
     }
 }

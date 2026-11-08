@@ -495,3 +495,88 @@ public class MetricTests
         Assert.Equal(opt, s.TourLength(TourFiles.Read(Path.Combine(Repo.Root, "data", name + ".opt.tour"))));
     }
 }
+
+public class LabAndEditorTests
+{
+    private static Process StartEngine(params string[] args)
+    {
+        var psi = new ProcessStartInfo(Repo.EngineBinary()) { UseShellExecute = false, RedirectStandardOutput = true };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        var p = Process.Start(psi)!;
+        p.OutputDataReceived += (_, _) => { };
+        p.BeginOutputReadLine();
+        return p;
+    }
+
+    [Fact]
+    public async Task T_lab_commands_against_engine()
+    {
+        var dir = Directory.CreateTempSubdirectory("apex_gui_lab_");
+        var endpoint = OperatingSystem.IsWindows() ? "apex_gui_lab_" + Environment.ProcessId : Path.Combine(dir.FullName, "e.sock");
+        var shared = Path.Combine(dir.FullName, "tour.shm");
+        using var engine = StartEngine("--instance", Path.Combine(Repo.Root, "data", "pr1002.tsp"), "--mode", "lab", "--ipc", endpoint, "--shared-tour", shared);
+        using var c = EngineClient.Connect(endpoint, TimeSpan.FromSeconds(20));
+        Assert.Equal(2, c.EngineHello.Mode);
+        var steps = new System.Collections.Concurrent.BlockingCollection<string>();
+        c.Log += l => { if (l.StartsWith("lab_step ", StringComparison.Ordinal) || l.StartsWith("lab_error", StringComparison.Ordinal)) steps.Add(l); };
+        var finished = new TaskCompletionSource<string>();
+        c.Finished += j => finished.TrySetResult(j);
+        c.Start();
+        string Next() => steps.TryTake(out var l, TimeSpan.FromSeconds(30)) ? l : throw new TimeoutException("no lab reply");
+        c.SendCommand("heuristic nn 3");
+        var nn = LabStepRow.Parse(Next(), 1)!;
+        Assert.Equal("nn", nn.Name);
+        long prev = nn.After;
+        foreach (var cmd in new[] { "two_opt", "two_opt_oropt", "lk", "ils 0.5" })
+        {
+            c.SendCommand("heuristic " + cmd);
+            var r = LabStepRow.Parse(Next(), 2)!;
+            Assert.Equal(cmd.Split(' ')[0], r.Name);
+            Assert.Equal(prev, r.Before);
+            Assert.True(r.After <= r.Before);
+            prev = r.After;
+        }
+        c.SendCommand("heuristic bogus");  // rejected by the server before the queue: answered as a log line
+        c.SendCommand("heuristic quit");
+        var json = await finished.Task.WaitAsync(TimeSpan.FromSeconds(30));
+        await engine.WaitForExitAsync(new CancellationTokenSource(10000).Token);
+        Assert.Contains("\"mode\":\"lab\"", json);
+        Assert.Contains($"\"ub\":{prev},", json);
+        using var reader = new SharedTourReader(shared);
+        var buf = Array.Empty<uint>();
+        Assert.True(reader.TryRead(ref buf, out var n, out _));
+        Assert.Equal(1002, buf.Take(n).Distinct().Count());
+        var scene = Scene.LoadTsplib(Path.Combine(Repo.Root, "data", "pr1002.tsp"));
+        Assert.Equal(prev, scene.TourLength(buf.AsSpan(0, n)));  // GUI metric == engine metric
+        dir.Delete(true);
+    }
+
+    [Fact]
+    public async Task T_editor_instance_solves_to_proven_optimum()
+    {
+        var dir = Directory.CreateTempSubdirectory("apex_gui_edit_");
+        var e = new EditableInstance { Name = "edit60" };
+        e.Generate("clustered", 60, 7);
+        Assert.Equal(60, e.Points.Distinct().Count());
+        e.Points.Add((500, 500));  // a point added by hand
+        e.Points.RemoveAt(0);      // and one deleted
+        var path = Path.Combine(dir.FullName, "edit60.tsp");
+        e.Save(path);
+        Assert.Equal(60, Scene.LoadTsplib(path).Count);
+        Assert.Equal(60, InstanceInfo.Read(path).Dimension);
+        var report = Path.Combine(dir.FullName, "r.json");
+        using var engine = StartEngine("--instance", path, "--mode", "exact", "--time-limit", "60", "--report", report);
+        await engine.WaitForExitAsync(new CancellationTokenSource(90000).Token);
+        Assert.Equal(0, engine.ExitCode);
+        Assert.Contains("\"status\":\"OPTIMAL_PROVEN\"", File.ReadAllText(report));
+        foreach (var kind in EditableInstance.Kinds)
+        {
+            var g = new EditableInstance();
+            g.Generate(kind, 250, 3);
+            Assert.Equal(250, g.Points.Count);
+            Assert.Equal(250, g.Points.Distinct().Count());
+        }
+        Assert.Throws<InvalidOperationException>(() => new EditableInstance().Save(Path.Combine(dir.FullName, "empty.tsp")));
+        dir.Delete(true);
+    }
+}

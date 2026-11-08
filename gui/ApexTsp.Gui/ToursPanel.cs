@@ -40,7 +40,7 @@ public sealed partial class MainWindow
 
     private Control ToursCard()
     {
-        _showDiff.IsCheckedChanged += (_, _) => { _map.Renderer.ShowDiff = _showDiff.IsChecked == true; _map.Invalidate(); };
+        _showDiff.IsCheckedChanged += (_, _) => { _map.Renderer.ShowDiff = _showDiff.IsChecked == true; InvalidateMaps(); };
         var all = new Button { Content = "show all", Padding = new Thickness(8, 2), Margin = new Thickness(0, 0, 6, 0) };
         all.Click += (_, _) => SetAllTours(true);
         var none = new Button { Content = "hide all", Padding = new Thickness(8, 2) };
@@ -132,7 +132,7 @@ public sealed partial class MainWindow
         sc.Layers.Clear();
         foreach (var t in _tours.Take(_tours.Count - 1).Where(t => t.Visible))
             sc.Layers.Add(new TourLayer(t.Tour, t.Count, Palette.Sk(t.Color).WithAlpha(210)));
-        _map.Invalidate();
+        InvalidateMaps();
     }
 
     private void RebuildTourRows()

@@ -1,9 +1,13 @@
 // APEX-TSP engine entry point (Sprint 0: scalable mode = primal engine only).
 #include <chrono>
+#include <cctype>
+#include <condition_variable>
+#include <deque>
 #include <cstdio>
 #include <algorithm>
 #include <exception>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -26,6 +30,7 @@
 #include "decomp/pipeline.hpp"
 #include "hk/held_karp.hpp"
 #include "ipc/server.hpp"
+#include "primal/lab.hpp"
 #include "primal/lk_lite.hpp"
 #include "primal/two_opt.hpp"
 
@@ -71,6 +76,10 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
     double prior_wall = 0;
     auto ck_last = Clock::time_point{};
     std::unique_ptr<apex::ipc::IpcServer> ipc;
+    // Lab mode (M6.4): commands from the GUI are queued here and run on this thread.
+    std::mutex lab_mu;
+    std::condition_variable lab_cv;
+    std::deque<std::string> lab_queue;
     auto write_v1 = [&](const apex::Tour& t, const std::string& rng_state, double wall) {
         apex::CheckpointV1 ck;
         ck.instance_hash = apex::instance_hash(inst);
@@ -89,7 +98,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         sc.endpoint = opt.ipc;
         sc.shared_tour_path = opt.shared_tour.empty() ? default_shared_tour(opt.ipc) : opt.shared_tour;
         sc.tour_capacity = inst.n;
-        sc.hello.mode = opt.mode == "exact" ? 0 : 1;
+        sc.hello.mode = opt.mode == "exact" ? 0 : opt.mode == "scalable" ? 1 : 2;  // 2 = lab
         sc.hello.mem_limit_mb = static_cast<uint32_t>(opt.mem_limit_mb);
         sc.hello.threads = opt.threads;
         sc.forward = &log;
@@ -100,11 +109,27 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
             write_v1(latest, rng_snapshot, prior_wall + since(t0));
             return true;
         };
+        if (opt.mode == "lab")
+            sc.on_command = [&](std::string_view cmd) -> std::string {
+                std::istringstream in{std::string(cmd)};
+                std::string verb, step;
+                in >> verb >> step;
+                const auto& names = apex::lab_step_names();
+                if (verb != "heuristic" || (step != "quit" && std::find(names.begin(), names.end(), step) == names.end()))
+                    return "lab_error unknown command '" + std::string(cmd) + "'";
+                {
+                    std::lock_guard<std::mutex> lk(lab_mu);
+                    lab_queue.push_back(std::string(cmd).substr(std::string(cmd).find(step)));
+                }
+                lab_cv.notify_one();
+                return "lab_queued " + step;
+            };
         ipc = std::make_unique<apex::ipc::IpcServer>(sc);
         if (!ipc->listening()) throw std::runtime_error("--ipc: cannot listen on " + opt.ipc);
     }
     apex::TelemetrySink& tel = ipc ? static_cast<apex::TelemetrySink&>(*ipc) : log;
     auto on_tour = [&](const apex::Tour& t) {
+        if (!ipc) return;
         std::lock_guard<std::mutex> lk(ck_mu);
         const auto now = Clock::now();
         if (now - ck_last < std::chrono::milliseconds(500)) return;
@@ -170,6 +195,69 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
                                   {"fallback_edges", std::to_string(g.fallback_edges)},
                                   {"ms", fmt(since(tg) * 1e3)}});
 
+    if (opt.mode == "lab") {
+        // Heuristics lab: start from the space-filling-curve tour, run the --lab steps, then (with
+        // a GUI) every queued command until QUIT / SHUTDOWN. Every tour is published.
+        phase("lab", tour, rng);
+        std::string names;
+        for (const auto& n : apex::lab_step_names()) names += (names.empty() ? "" : ",") + n;
+        tel.event("lab_ready", {{"steps", names}, {"ub", std::to_string(tour.cost)}});
+        auto publish = [&](const apex::Tour& t) {
+            if (!ipc) return;
+            std::lock_guard<std::mutex> lk(ck_mu);
+            latest = t;
+            ipc->publish_tour(t, true);
+        };
+        auto run_step = [&](const std::string& cmd) {
+            apex::LabStep st;
+            try {
+                st = apex::run_lab_step(cmd, tour, inst, g, rng(), opt.threads, [&](const apex::Tour& t) { on_tour(t); });
+            } catch (const std::logic_error& e) {  // bad numeric argument
+                st.name = cmd;
+                st.error = e.what();
+            }
+            if (!st.ok) {
+                tel.event("lab_error", {{"step", st.name}, {"msg", st.error}});
+                return;
+            }
+            publish(tour);
+            count_ub(tour.cost);
+            if (tour.cost < best.cost || best.order.empty()) best = tour;
+            tel.event("lab_step", {{"name", st.name}, {"heuristic", "true"}, {"before", std::to_string(st.before)},
+                                   {"after", std::to_string(st.after)}, {"delta", std::to_string(st.after - st.before)},
+                                   {"moves", std::to_string(st.moves)}, {"ms", fmt(st.ms)}, {"best", std::to_string(best.cost)}});
+            if (apex::cancel_requested() && !(ipc && ipc->shutdown_requested())) {
+                apex::engine_control().reset();  // cancel stops the running step only
+                tel.event("lab_step_cancelled", {{"name", st.name}});
+            }
+        };
+        publish(tour);
+        std::string steps = opt.lab;
+        std::replace(steps.begin(), steps.end(), ',', ' ');
+        std::replace(steps.begin(), steps.end(), ':', ' ');
+        {
+            std::istringstream in(steps);
+            std::vector<std::string> toks{std::istream_iterator<std::string>(in), {}};
+            for (size_t i = 0; i < toks.size(); ++i) {
+                std::string cmd = toks[i];
+                if (cmd == "ils" && i + 1 < toks.size() && std::isdigit(static_cast<unsigned char>(toks[i + 1][0]))) cmd += " " + toks[++i];
+                run_step(cmd);
+            }
+        }
+        while (ipc && !ipc->shutdown_requested()) {
+            std::string cmd;
+            {
+                std::unique_lock<std::mutex> lk(lab_mu);
+                lab_cv.wait_for(lk, std::chrono::milliseconds(100), [&] { return !lab_queue.empty(); });
+                if (lab_queue.empty()) continue;
+                cmd = lab_queue.front();
+                lab_queue.pop_front();
+            }
+            if (cmd.rfind("quit", 0) == 0) break;
+            run_step(cmd);
+        }
+        tour = best;
+    } else {
     // heuristic (M4.7): density clusters solved in parallel, merged level by level with
     // re-evaluation (or greedy + 2-opt for small n). UB only; no bound from this phase exists.
     if (!opt.resume) {
@@ -299,6 +387,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         ran_bnc = true;
         status = r.status == apex::BnCResult::Status::MemLimit ? "MEM_LIMIT" : apex::status_name(r.status);
     }
+    }  // not lab
 
     best = tour;
     } catch (const std::exception& e) {

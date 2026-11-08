@@ -95,7 +95,8 @@ public sealed class RunSession : IDisposable
         catch (IOException) { return false; }
     }
 
-    public bool Running => _engine is { HasExited: false } || (Client is not null && _engine is null);
+    private bool _disposed;
+    public bool Running => !_disposed && (_engine is { HasExited: false } || (Client is not null && _engine is null));
 
     // Latest tour from the shared mapping (seqlock copy; never blocks the engine).
     public bool TryReadTour(out uint[] tour, out int count)
@@ -113,6 +114,8 @@ public sealed class RunSession : IDisposable
 
     public void Dispose()
     {
+        if (_disposed) return;
+        _disposed = true;
         try
         {
             if (_engine is { HasExited: false }) Send(MsgType.Shutdown);

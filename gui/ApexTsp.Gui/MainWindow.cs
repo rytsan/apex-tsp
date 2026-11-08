@@ -35,7 +35,7 @@ public sealed partial class MainWindow : Window
     private readonly TextBlock _ubBadgeText = new() { Foreground = Brushes.White, FontWeight = FontWeight.SemiBold, FontSize = 11 };
     private readonly CheckBox _showTour = new() { Content = "tour", IsChecked = true }, _showNodes = new() { Content = "nodes", IsChecked = true },
         _showLp = new() { Content = "LP support", IsChecked = true }, _flashLp = new() { Content = "flash new LP edges", IsChecked = true },
-        _logGap = new() { Content = "log gap", IsChecked = true };
+        _logGap = new() { Content = "log gap", IsChecked = true }, _showLabels = new() { Content = "labels", IsChecked = true };
     private readonly ComboBox _logCat = new() { ItemsSource = new[] { "all", "heuristic", "lp", "cuts", "tree", "system" }, SelectedIndex = 0, MinWidth = 110 };
     private bool _solverDirty;
     private IDisposable? _flashOff;
@@ -111,15 +111,16 @@ public sealed partial class MainWindow : Window
         _vm.SolverChanged += () => _solverDirty = true;
         // Charts redraw at most 10 times per second however fast events arrive.
         new DispatcherTimer(TimeSpan.FromMilliseconds(100), DispatcherPriority.Background, (_, _) => RefreshSolverViews()).Start();
-        void Layer(CheckBox c, Action<bool> set) => c.IsCheckedChanged += (_, _) => { set(c.IsChecked == true); _map.Invalidate(); };
+        void Layer(CheckBox c, Action<bool> set) => c.IsCheckedChanged += (_, _) => { set(c.IsChecked == true); InvalidateMaps(); };
         Layer(_showTour, v => _map.Renderer.ShowTour = v);
         Layer(_showNodes, v => _map.Renderer.ShowNodes = v);
         Layer(_showLp, v => _map.Renderer.ShowLp = v);
+        Layer(_showLabels, v => _map.Renderer.ShowLabels = _labMap.Renderer.ShowLabels = v);
         _logGap.IsCheckedChanged += (_, _) => { _chart.LogGap = _logGap.IsChecked == true; _chart.InvalidateVisual(); };
         _logCat.SelectionChanged += (_, _) => RefilterLog();
         _vm.ClusterBox += (id, x0, y0, x1, y1) => _map.Scene?.SetCluster(id, x0, y0, x1, y1);
         _vm.LogAdded += AddLogLine;
-        _overlay.IsCheckedChanged += (_, _) => { _map.Renderer.ClusterOverlay = _overlay.IsChecked == true; _map.Invalidate(); };
+        _overlay.IsCheckedChanged += (_, _) => { _map.Renderer.ClusterOverlay = _overlay.IsChecked == true; InvalidateMaps(); };
         _allRuns.IsCheckedChanged += (_, _) => RefreshRuns();
         _runs.SelectionChanged += (_, _) => ShowRunDetail();
         _runs.DoubleTapped += (_, _) => LoadSelectedRun();
@@ -267,6 +268,8 @@ public sealed partial class MainWindow : Window
         _tabs.ItemsSource = new[]
         {
             new TabItem { Header = "Solve", Content = solve },
+            new TabItem { Header = "Heuristics lab", Content = BuildLabTab() },
+            new TabItem { Header = "Editor", Content = BuildEditorTab() },
             new TabItem { Header = "Runs", Content = runsGrid },
             new TabItem { Header = "Log", Content = logPanel },
         };
@@ -280,10 +283,16 @@ public sealed partial class MainWindow : Window
 
     private readonly List<Border> _cards = [];
 
+    private void InvalidateMaps()
+    {
+        _map.Invalidate();
+        _labMap.Invalidate();
+    }
+
     private WrapPanel LayerPanel()
     {
         var p = new WrapPanel();
-        foreach (var c in new[] { _showTour, _showNodes, _showLp, _flashLp, _overlay })
+        foreach (var c in new[] { _showTour, _showNodes, _showLabels, _showLp, _flashLp, _overlay })
         {
             c.Margin = new Thickness(0, 0, 14, 4);
             p.Children.Add(c);
@@ -319,6 +328,18 @@ public sealed partial class MainWindow : Window
 
     // ---- theme --------------------------------------------------------------------------
 
+    private void ApplyRendererPalette(TourRenderer r)
+    {
+        r.Background = Palette.Sk(_pal.Surface);
+        r.NodeColor = Palette.Sk(_pal.MapNode);
+        r.TourColor = Palette.Sk(_pal.MapTour);
+        r.LpIntegralColor = Palette.Sk(_pal.Lp);
+        r.LpFractionalColor = Palette.Sk(_pal.Danger);
+        r.LpNewColor = Palette.Sk(Color.Parse("#F9AB00"));
+        r.RemovedColor = Palette.Sk(_pal.Danger);
+        r.AddedColor = Palette.Sk(_pal.Proven);
+    }
+
     private void SetTheme(string name)
     {
         _settings.Theme = name;
@@ -336,20 +357,16 @@ public sealed partial class MainWindow : Window
             c.Background = _pal.Brush(_pal.Surface);
             c.BorderBrush = _pal.Brush(_pal.Border);
         }
-        _map.Renderer.Background = Palette.Sk(_pal.Surface);
-        _map.Renderer.NodeColor = Palette.Sk(_pal.MapNode);
-        _map.Renderer.TourColor = Palette.Sk(_pal.MapTour);
-        _chart.Pal = _cuts.Pal = _tree.Pal = _pal;
-        _map.Renderer.LpIntegralColor = Palette.Sk(_pal.Lp);
-        _map.Renderer.LpFractionalColor = Palette.Sk(_pal.Danger);
-        _map.Renderer.LpNewColor = Palette.Sk(Color.Parse("#F9AB00"));
-        _map.Renderer.RemovedColor = Palette.Sk(_pal.Danger);
-        _map.Renderer.AddedColor = Palette.Sk(_pal.Proven);
+        foreach (var r in new[] { _map.Renderer, _labMap.Renderer }) ApplyRendererPalette(r);
+
+        _chart.Pal = _cuts.Pal = _tree.Pal = _editor.Pal = _pal;
+        _editor.InvalidateVisual();
+
         RebuildTourRows();
         _solverDirty = true;
         RefreshSolverViews();
         RefilterLog();
-        _map.Invalidate();
+        InvalidateMaps();
         UpdatePanels();
     }
 
@@ -363,6 +380,7 @@ public sealed partial class MainWindow : Window
         if (_opt.Attach is not null) AttachRun();
         else if (_opt.DemoOut is not null) { ApplyEngineArgs(_opt.EngineArgs); StartRun(); }
         else if (_opt.DemoApp is not null) StartAppDemo();
+        else if (_opt.DemoLab is not null) StartLabDemo();
         RefreshRuns();
     }
 
@@ -374,8 +392,9 @@ public sealed partial class MainWindow : Window
             var scene = Scene.LoadTsplib(path);
             if (_run is { Running: true }) { Toast("stop the current run before opening another instance"); return false; }
             _inst = info;
-            _map.Scene = scene;
+            _map.Scene = _labMap.Scene = scene;
             _map.Fit();
+            _labMap.Fit();
             _vm.Reset();
             ResetTours();
             _settings.Touch(Path.GetFullPath(path));
@@ -475,18 +494,19 @@ public sealed partial class MainWindow : Window
 
     // ---- runs ---------------------------------------------------------------------------
 
-    private void StartRun()
+    private void StartRun() => StartRun(null);
+
+    private void StartRun(RunSettings? labSettings)
     {
         if (_inst is null) { Toast("open an instance first"); return; }
         if (_run is { Running: true }) { Toast("a run is already active"); return; }
-        var s = ReadForm();
+        var s = labSettings ?? ReadForm();
         if (s.Validate() is { } why) { _settingsError.Text = why; _settingsError.Foreground = _pal.Brush(_pal.Danger); return; }
         _settingsError.Text = "";
         var engine = EngineLocator.Find(_settings.EnginePath);
         if (engine is null) { _ = LocateEngine(); return; }
         _settings.EnginePath = engine;
-        _settings.Run = s.Clone();
-        SaveSettings();
+        if (labSettings is null) { _settings.Run = s.Clone(); SaveSettings(); }
         _run?.Dispose();
         _vm.Reset();
         ResetTours();
@@ -519,11 +539,11 @@ public sealed partial class MainWindow : Window
         s.Connected += c =>
         {
             c.Telemetry += p => Dispatcher.UIThread.Post(() => _vm.OnTelemetry(p));
-            c.Log += l => Dispatcher.UIThread.Post(() => _vm.OnLog(l));
+            c.Log += l => Dispatcher.UIThread.Post(() => { _vm.OnLog(l); OnLabLog(l); });
             c.ClusterMap += m => Dispatcher.UIThread.Post(() =>
             {
                 foreach (var e in m) _map.Scene?.SetClusterState(e.Id, e.State);
-                _map.Invalidate();
+                InvalidateMaps();
             });
             c.TourUpdate += (_, _) => ReadTour(s);
             c.Finished += j => Dispatcher.UIThread.Post(() => OnFinished(s, j));
@@ -557,9 +577,9 @@ public sealed partial class MainWindow : Window
         if (_run != s || _map.Scene is null) return;
         _map.Scene.SetLp(seg);
         _map.Scene.LpFlash = _flashLp.IsChecked == true;
-        _map.Invalidate();
+        InvalidateMaps();
         _flashOff?.Dispose();
-        _flashOff = DispatcherTimer.RunOnce(() => { if (_map.Scene is { } sc) { sc.LpFlash = false; _map.Invalidate(); } }, TimeSpan.FromMilliseconds(600));
+        _flashOff = DispatcherTimer.RunOnce(() => { if (_map.Scene is { } sc) { sc.LpFlash = false; InvalidateMaps(); } }, TimeSpan.FromMilliseconds(600));
         ++LpFrames;
     }
 
@@ -591,7 +611,7 @@ public sealed partial class MainWindow : Window
             $"round {last.Round}: SEC {last.Sec}, blossom {last.Blossom}, component {last.Component}, pool {last.Pool} · LP {Draw.Num(last.Lp)} · rows {last.Rows}\ntotal SEC {vm.TotalSec} · blossom {vm.TotalBlossom} · component {vm.TotalComponent} · {vm.CutRounds.Count} rounds");
         var tour = vm.Proven || vm.Status == "OPTIMAL_PROVEN" ? _pal.Proven : vm.UbHeuristic ? _pal.Heuristic : _pal.Lp;
         var sk = Palette.Sk(tour);
-        if (_map.Renderer.TourColor != sk) { _map.Renderer.TourColor = sk; _map.Invalidate(); }
+        if (_map.Renderer.TourColor != sk) { _map.Renderer.TourColor = _labMap.Renderer.TourColor = sk; InvalidateMaps(); }
         UpdatePanels();
     }
 
@@ -612,7 +632,7 @@ public sealed partial class MainWindow : Window
             if (_run != s || _map.Scene is null) return;
             OnTourRead(buf, count);
             _map.Scene.SetTour(buf, count);
-            _map.Invalidate();
+            InvalidateMaps();
         });
     }
 
@@ -684,7 +704,7 @@ public sealed partial class MainWindow : Window
         {
             var t = TourFiles.Read(tour);
             _map.Scene.SetTour(t, t.Length);
-            _map.Invalidate();
+            InvalidateMaps();
         }
         LoadSettingsIntoForm(r.Settings);
         _tabs.SelectedIndex = 0;
@@ -771,6 +791,7 @@ public sealed partial class MainWindow : Window
         _status.Text = "status: " + vm.Status;
         _report.Text = vm.Finished ? vm.ReportJson : "";
         var running = _run is { Running: true } && !vm.Finished;
+        UpdateLabButtons();
         _startBtn.IsEnabled = _inst is not null && !running;
         _pauseBtn.IsEnabled = _resumeBtn.IsEnabled = _cancelBtn.IsEnabled = running;
         _ckBtn.IsEnabled = running && (_runSettings.CheckpointDir.Length > 0);

@@ -101,7 +101,7 @@ struct TelemetryPacket {
     uint64_t magic_version;   // 'ATSP' << 32 | protocol version
     uint64_t seq;             // monotonic; readers drop duplicates / reordering
     uint64_t timestamp_us;
-    uint32_t mode;            // 0 exact, 1 scalable
+    uint32_t mode;            // 0 exact, 1 scalable, 2 lab
     uint32_t lb_source;       // 0 lp, 1 lagrangian
     uint32_t phase;
     uint32_t open_nodes;

@@ -184,7 +184,7 @@ public sealed partial class MainWindow
                 }
                 break;
             case 5:  // history tab
-                _tabs.SelectedIndex = 1;
+                _tabs.SelectedIndex = 3;  // Runs
                 RefreshRuns();
                 _runs.SelectedIndex = 0;
                 Check(_runList.Count >= 1 && _runList[0].Dir == _appRunDir, $"history lists the run first ({_runList.Count} runs)");
@@ -217,6 +217,119 @@ public sealed partial class MainWindow
                     _theme.SelectedItem = "system";
                     Stage(9);
                 }
+                break;
+            case 9:
+                _demo?.Stop();
+                AppDemoLog(_appFailed ? "RESULT FAIL" : "RESULT PASS");
+                _appLog?.Dispose();
+                _appLog = null;
+                Close();
+                break;
+        }
+    }
+
+    // ---- G6.4: every heuristic through the lab tab, then an instance made in the editor solved exact.
+    private int _labStage, _labExpected = int.MaxValue;
+    private const string LabChain = "random lk nn 0 two_opt lk hilbert two_opt_oropt greedy two_opt ils 3 decomp lk";
+
+    private void StartLabDemo()
+    {
+        Directory.CreateDirectory(_opt.DemoLab!);
+        _appLog = new StreamWriter(Path.Combine(_opt.DemoLab!, "lab_demo.log"));
+        _appT0 = DateTime.UtcNow;
+        AppDemoLog($"opened {_inst?.Path} n={_inst?.Dimension}");
+        _tabs.SelectedIndex = 1;
+        StartLab();
+        _demo = new DispatcherTimer(TimeSpan.FromMilliseconds(250), DispatcherPriority.Background, (_, _) => LabDemoTick());
+        _demo.Start();
+        Stage(0);
+    }
+
+    private void LabDemoTick()
+    {
+        var dir = _opt.DemoLab!;
+        switch (_labStage)
+        {
+            case 0:
+                if (LabActive && _labStatus.Text?.StartsWith("ready", StringComparison.Ordinal) == true)
+                {
+                    _chain.Text = LabChain;
+                    AppDemoLog("chain: " + LabChain);
+                    _labExpected = RunChain(LabChain);
+                    _labStage = 1;
+                    Stage(1);
+                }
+                else if (StageSeconds > 60) { Check(false, "lab engine ready"); _labStage = 9; }
+                break;
+            case 1:
+                if (!_labBusy && _chainQueue.Count == 0 && _labSteps.Count >= _labExpected)
+                {
+                    foreach (var r in _labSteps) AppDemoLog(r.Line());
+                    var improvers = new[] { "two_opt", "two_opt_oropt", "lk", "ils" };
+                    Check(_labSteps.Where(r => improvers.Contains(r.Name)).All(r => r.After <= r.Before), "improvement steps never worsen the tour");
+                    Check(_labSteps.Select(r => r.Name).Distinct().Count() == 9, $"all 9 heuristics ran ({string.Join(",", _labSteps.Select(r => r.Name).Distinct())})");
+                    var len = _map.Scene!.TourLength(_map.Scene.Tour.AsSpan(0, _map.Scene.TourCount));
+                    Check(_map.Scene.TourCount == _inst!.Dimension && len == _labSteps[^1].After, $"displayed tour: {_map.Scene.TourCount} nodes, length {len} == last step {_labSteps[^1].After}");
+                    Check(_tours.Count >= 5, $"{_tours.Count} tours kept in the history");
+                    SaveWindowPng(Path.Combine(dir, "1_lab.png"));
+                    SetAllTours(true);
+                    _tabs.SelectedIndex = 0;
+                    _labStage = 2;
+                    Stage(2);
+                }
+                else if (StageSeconds > 180)
+                {
+                    Check(false, $"lab chain finished (steps {_labSteps.Count}, busy {_labBusy}, queued {_chainQueue.Count}, status '{_labStatus.Text}')");
+                    foreach (var l in _vm.LogTail.TakeLast(20)) AppDemoLog("log: " + l);
+                    _labStage = 9;
+                }
+                break;
+            case 2:
+                if (StageSeconds < 0.6) break;
+                SaveWindowPng(Path.Combine(dir, "2_tours.png"));
+                _tabs.SelectedIndex = 1;
+                LabSend("quit");
+                _labStage = 3;
+                Stage(3);
+                break;
+            case 3:
+                if (_vm.Finished)
+                {
+                    Check(_vm.Status == "done", $"lab engine finished, status {_vm.Status}");
+                    _tabs.SelectedIndex = 2;
+                    _edKind.SelectedItem = "clustered";
+                    _edN.Value = 80;
+                    _edSeed.Value = 11;
+                    _edName.Text = "editor80";
+                    Generate();
+                    _editor.Model.Points.Add((500, 500));
+                    AppDemoLog($"editor: generated clustered 80 (seed 11) + 1 point by hand = {_editor.Model.Points.Count} points");
+                    _labStage = 4;
+                    Stage(4);
+                }
+                else if (StageSeconds > 30) { Check(false, "lab engine quit"); _labStage = 9; }
+                break;
+            case 4:
+                if (StageSeconds < 0.6) break;
+                SaveWindowPng(Path.Combine(dir, "3_editor.png"));
+                var path = OpenEdited(solve: true);
+                Check(path is not null, "edited instance saved and opened: " + path);
+                _labStage = 5;
+                Stage(5);
+                break;
+            case 5:
+                if (_vm.Finished)
+                {
+                    Check(_vm.Status == "OPTIMAL_PROVEN", $"edited instance: {_vm.Status}, UB {MainViewModel.Fmt(_vm.UpperBound)} LB {MainViewModel.Fmt(_vm.LowerBound)}");
+                    _labStage = 6;
+                    Stage(6);
+                }
+                else if (StageSeconds > 120) { Check(false, "edited instance solved"); _labStage = 9; }
+                break;
+            case 6:
+                if (StageSeconds < 0.8) break;
+                SaveWindowPng(Path.Combine(dir, "4_editor_solved.png"));
+                _labStage = 9;
                 break;
             case 9:
                 _demo?.Stop();

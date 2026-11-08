@@ -29,6 +29,9 @@ public sealed class TourRenderer
     public bool ShowNodes { get; set; } = true;
     public bool ShowLp { get; set; } = true;
     public bool ShowDiff { get; set; } = true;
+    public bool ShowLabels { get; set; } = true;   // node ids while at most LabelLimit nodes are visible
+    public int LabelLimit { get; set; } = 400;
+    private readonly SKPaint _labelPaint = new() { TextSize = 10, IsAntialias = true };
     public SKColor RemovedColor { get; set; } = new(0xD9, 0x30, 0x25);
     public SKColor AddedColor { get; set; } = new(0x1E, 0x8E, 0x3E);
     private readonly SKPaint _layerPaint = new() { Style = SKPaintStyle.Stroke, StrokeWidth = 0, IsAntialias = false };
@@ -86,6 +89,12 @@ public sealed class TourRenderer
                     for (var i = 0; i < n; ++i)
                         if (_vis[i]) _pts[points++] = new SKPoint(_sx[i], _sy[i]);
                     canvas.DrawPoints(SKPointMode.Points, _pts.AsSpan(0, points).ToArray(), _nodePaint);
+                }
+                if (ShowLabels && visible <= LabelLimit)
+                {
+                    _labelPaint.Color = NodeColor.WithAlpha(170);
+                    for (var i = 0; i < n; ++i)
+                        if (_vis[i]) canvas.DrawText((i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture), _sx[i] + 3, _sy[i] - 3, _labelPaint);
                 }
                 break;
             case LodLevel.Decimated:

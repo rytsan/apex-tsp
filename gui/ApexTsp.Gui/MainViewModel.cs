@@ -35,7 +35,7 @@ public sealed record LogLine(string Text, LogCategory Category)
 // the views; T_vm_gap_chart_updates drives it with a synthetic stream. Call from one thread.
 public sealed class MainViewModel : INotifyPropertyChanged
 {
-    public static readonly string[] PhaseNames = ["load", "candidate_graph", "construct", "two_opt", "held_karp", "polish", "bnc", "done"];
+    public static readonly string[] PhaseNames = ["load", "candidate_graph", "construct", "two_opt", "held_karp", "polish", "bnc", "done", "lab"];
 
     public int HistoryCapacity { get; init; } = 600;
     private readonly List<BoundSample> _history = [];
@@ -136,7 +136,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
         LowerBound = p.LowerBound;
         GapPct = p.GapPct;
         Phase = p.Phase < PhaseNames.Length ? PhaseNames[p.Phase] : "-";
-        Mode = p.Mode == 0 ? "exact" : "scalable";
+        Mode = p.Mode switch { 0 => "exact", 1 => "scalable", _ => "lab" };
         LbSource = double.IsNaN(p.LowerBound) ? "-" : p.LbSource == 0 ? "lp" : "lagrangian";
         CutPoolSize = p.CutPoolSize;
         OpenNodes = p.OpenNodes;

@@ -99,6 +99,51 @@ public sealed class MapView : Control
             _dirty = false;
         }
         context.DrawImage(_bmp, new Rect(0, 0, w, h));
+        if (HoverText is { } t)
+        {
+            var ft = new FormattedText(t, System.Globalization.CultureInfo.InvariantCulture, FlowDirection.LeftToRight, Typeface.Default, 11, Brushes.White);
+            context.FillRectangle(new SolidColorBrush(Color.FromArgb(200, 0x20, 0x23, 0x28)), new Rect(6, 6, ft.Width + 12, ft.Height + 8), 4);
+            context.DrawText(ft, new Point(12, 10));
+            if (_hoverPt is { } hp) context.DrawEllipse(null, new Pen(Brushes.OrangeRed, 2), hp, 6, 6);
+        }
+    }
+
+    // Hover: nearest node within 8 px -> id (TSPLIB, 1-based), coordinates, tour neighbours and
+    // the lengths of its two tour edges.
+    public string? HoverText { get; private set; }
+    private Point? _hoverPt;
+
+    private void UpdateHover(Point p)
+    {
+        string? text = null;
+        _hoverPt = null;
+        if (Scene is { } s && s.Count > 0)
+        {
+            var best = -1;
+            var bd = 64.0;
+            for (var i = 0; i < s.Count; ++i)
+            {
+                double dx = View.Sx(s.X[i]) - p.X, dy = View.Sy(s.Y[i]) - p.Y, d = dx * dx + dy * dy;
+                if (d < bd) { bd = d; best = i; }
+            }
+            if (best >= 0)
+            {
+                var u = (uint)best;
+                var ci = System.Globalization.CultureInfo.InvariantCulture;
+                double x = s.XD?[u] ?? s.X[u], y = s.YD?[u] ?? s.Y[u];
+                text = string.Create(ci, $"node {u + 1}  ({x:0.###}, {y:0.###})");
+                if (s.TourNeighbors(u) is var (a, b))
+                    text += string.Create(ci, $"\ntour: {a + 1} —{s.Dist(a, u)}— {u + 1} —{s.Dist(u, b)}— {b + 1}");
+                _hoverPt = new Point(View.Sx(s.X[u]), View.Sy(s.Y[u]));
+            }
+        }
+        if (text != HoverText) { HoverText = text; InvalidateVisual(); }
+    }
+
+    protected override void OnPointerExited(PointerEventArgs e)
+    {
+        HoverText = null;
+        InvalidateVisual();
     }
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
@@ -110,7 +155,7 @@ public sealed class MapView : Control
 
     protected override void OnPointerMoved(PointerEventArgs e)
     {
-        if (_drag is not { } d) return;
+        if (_drag is not { } d) { UpdateHover(e.GetPosition(this)); return; }
         var p = e.GetPosition(this);
         PanBy(p.X - d.X, p.Y - d.Y);
         _drag = p;

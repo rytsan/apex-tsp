@@ -16,7 +16,7 @@ struct CliError : std::runtime_error {
 
 struct Options {
     std::string instance;
-    std::string mode = "scalable";  // exact | scalable
+    std::string mode = "scalable";  // exact | scalable | lab (heuristics lab, M6.4)
     double time_limit_s = 0;        // 0 = unlimited
     uint64_t mem_limit_mb = 4096;   // enforced from Sprint 4 (MASTER §2.3)
     uint32_t threads = 1;
@@ -30,13 +30,15 @@ struct Options {
     uint32_t leaf_exact_limit = 300;  // leaves this small use the exact mini B&C path
     std::string ipc;                // GUI endpoint: socket path (Linux) / pipe name (Windows)
     std::string shared_tour;        // mmap tour file for the GUI (default: <temp>/<endpoint name>.tour)
+    std::string lab;                // lab mode: steps run at start, comma separated ("greedy,two_opt,lk")
 };
 
 inline constexpr const char* kUsage =
-    "usage: apex_tsp --instance <file.tsp> [--mode exact|scalable] [--time-limit <s>]\n"
+    "usage: apex_tsp --instance <file.tsp> [--mode exact|scalable|lab] [--time-limit <s>]\n"
     "                [--mem-limit-mb <n>] [--threads <n>] [--seed <n>] [--knn <n>]\n"
     "                [--out <route.tour>] [--checkpoint <dir>] [--resume] [--report <report.json>]\n"
-    "                [--leaf-size <n>] [--leaf-exact-limit <n>] [--ipc <endpoint>] [--shared-tour <file>]\n";
+    "                [--leaf-size <n>] [--leaf-exact-limit <n>] [--ipc <endpoint>] [--shared-tour <file>]\n"
+    "                [--lab <step,step,...>]   (lab: nn greedy hilbert random decomp two_opt two_opt_oropt lk ils[:s])\n";
 
 namespace cli_detail {
 template <class T>
@@ -74,10 +76,12 @@ inline Options parse_cli(const std::vector<std::string>& args) {
         else if (f == "--leaf-exact-limit") o.leaf_exact_limit = number<uint32_t>(f, value());
         else if (f == "--ipc") o.ipc = value();
         else if (f == "--shared-tour") o.shared_tour = value();
+        else if (f == "--lab") o.lab = value();
         else throw CliError("unknown flag '" + f + "'");
     }
     if (o.instance.empty()) throw CliError("--instance is required");
-    if (o.mode != "exact" && o.mode != "scalable") throw CliError("--mode must be exact or scalable");
+    if (o.mode != "exact" && o.mode != "scalable" && o.mode != "lab") throw CliError("--mode must be exact, scalable or lab");
+    if (!o.lab.empty() && o.mode != "lab") throw CliError("--lab needs --mode lab");
     if (o.time_limit_s < 0) throw CliError("--time-limit must be >= 0");
     if (o.threads == 0) throw CliError("--threads must be >= 1");
     if (o.knn == 0) throw CliError("--knn must be >= 1");

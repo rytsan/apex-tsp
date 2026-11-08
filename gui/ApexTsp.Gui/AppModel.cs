@@ -22,7 +22,7 @@ public sealed class RunSettings
     // Null when valid, else the first problem in words.
     public string? Validate()
     {
-        if (!Modes.Contains(Mode)) return "mode must be exact or scalable";
+        if (!Modes.Contains(Mode) && Mode != "lab") return "mode must be exact or scalable";
         if (!(TimeLimitS > 0)) return "time limit must be > 0 s";
         if (Threads < 1 || Threads > 256) return "threads must be 1..256";
         if (MemLimitMb < 64) return "memory ceiling must be >= 64 MB";
