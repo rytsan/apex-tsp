@@ -308,3 +308,29 @@ Transcripts: [`docs/SPRINT4_RESULTS.md`](docs/SPRINT4_RESULTS.md). Commit `5363f
 | G4.6 memory enforcement | `T_mem_limit_graceful`, `T_lp_concurrency_budget` green |
 | G4.7 Band A regression | **MISS**: eil51 / berlin52 / a280 proven; pr1002 (0.0157%) and fl3795 (1.22%) not proven in the Sprint 3 limits (same as the accepted G3.1 miss) |
 | G4.8 TSan + ASan + UBSan | clean: 111 test cases / 604692 assertions under ASan+UBSan, 7 parallel tests under TSan |
+
+---
+
+## 15. Sprint 5 results and final results (hardware: AMD Ryzen 5 3600X, 5 physical cores visible under WSL2, 25 GB RAM, GCC 13.3, preset `benchmark`)
+
+Transcripts: [`docs/SPRINT5_RESULTS.md`](docs/SPRINT5_RESULTS.md). Full campaign: [`docs/REPORT.md`](docs/REPORT.md). Engine commit `808ba8b`, seed 1, `--mem-limit-mb 4096`.
+
+Final results (gap vs reference = (UB - ref) / ref; certified gap = (UB - LB) / UB with the engine's own LB):
+
+| Instance | Mode | Threads | Time | UB | vs reference | LB (source) | Certified gap | Peak RAM |
+|---|---|---|---|---|---|---|---|---|
+| eil51 / berlin52 / a280 | exact | 5 | 0.1 / 0.1 / 0.5 s | 426 / 7542 / 2579 | 0 | = UB (LP) | 0, OPTIMAL_PROVEN | 5-8 MB |
+| pr1002 | exact | 5 | 1349.2 s | 259045 | 0 | 259045 (LP) | 0, OPTIMAL_PROVEN | 557 MB |
+| fl3795 | exact | 5 | 3651.9 s (limit 3600) | 28927 | 0.535% vs 28772 | 28587 (LP) | 1.1754%, not proven | 3137 MB |
+| pla85900 | scalable | 5 | 600 s | 143356450 | 0.684% vs optimum | 141629726 (HK) | 1.2045% | 77 MB |
+| mona-lisa100K | scalable | 5 | 600 s | 5764550 | 0.128% vs 5757191 (best known tour) | 5750673 (HK) | 0.2407% | 87 MB |
+| mona-lisa100K | scalable | 1 | 2700 s | 5765259 | 0.140% vs 5757191 (best known tour) | 5751055 (HK) | 0.2464% | 54 MB |
+
+| Gate | Result |
+|---|---|
+| G5.1 protocol robustness | `T_framing_fuzz` (0 frames from 1 MB garbage, 2000 CRC failures caught), `T_seqlock_reader_consistent` (973610 reads, 0 torn), `T_backpressure_drop_count` green; GUI decoder 5/5 |
+| G5.2 control loop | live against `apex_tsp` in B&C: pause stall 5.4 ms, resume, checkpoint written, cancel to FINISHED 0.10 s, FINISHED == report bytes; `T_control_*` green |
+| G5.3 GUI end-to-end | NativeAOT GUI + engine, pla85900 scalable 120 s: render p50 2.03 / p95 11.08 / p99 12.93 / max 20.48 ms (n = 3514); input-to-frame p95 11.23 ms; all 4 LOD levels; heatmap overlay; final report view == engine report |
+| G5.4 campaign | `docs/REPORT.md`: Bands A, C, D, E + hardware context; Band B deferred (§9) |
+| G5.5 regression | no regression: pr1002 now proven in 1349 s (Sprint 4: 0.0157%), fl3795 1.1754% (Sprint 4: 1.22%), Bands C / D at or better than Sprint 4. fl3795 not proven in 60 min: the accepted G3.1 / G4.7 miss, still open |
+| G5.6 hygiene | ASan+UBSan 120 test cases / 606067 assertions clean; TSan 10 threaded tests, 0 warnings; NativeAOT publish succeeds (SDK 10.0.403) |
