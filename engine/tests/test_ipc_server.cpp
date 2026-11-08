@@ -49,11 +49,18 @@ void send(Transport& t, MsgType type, uint64_t seq) {
 
 std::string as_text(const Frame& f) { return {f.payload.begin(), f.payload.end()}; }
 
+// The run control is process-wide: a failed REQUIRE must not leave it paused or cancelled for
+// the tests that follow.
+struct ControlGuard {
+    ControlGuard() { apex::engine_control().reset(); }
+    ~ControlGuard() { apex::engine_control().reset(); }
+};
+
 }  // namespace
 
 TEST_CASE("T_control_pause_resume") {
+    ControlGuard guard;
     auto& c = apex::engine_control();
-    c.reset();
     const auto inst = load("a280");
     const auto g = apex::build_candidate_graph(inst, {8, true});
     const auto start = apex::hilbert_tour(inst, apex::hilbert_order(inst));
@@ -89,12 +96,11 @@ TEST_CASE("T_control_pause_resume") {
     // Resume continues the same trajectory: identical to the run without a pause.
     CHECK(run.cost == ref.cost);
     CHECK(run.order == ref.order);
-    c.reset();
 }
 
 TEST_CASE("T_control_cancel") {
+    ControlGuard guard;
     auto& c = apex::engine_control();
-    c.reset();
     const auto inst = load("a280");
     const auto g = apex::build_candidate_graph(inst, {8, true});
     apex::Tour t = apex::hilbert_tour(inst, apex::hilbert_order(inst));
@@ -110,7 +116,6 @@ TEST_CASE("T_control_cancel") {
     MESSAGE("cancel: solver returned after " << ms << " ms");
     CHECK(ms <= 200);
     CHECK(apex::tour_cost(inst, t) == t.cost);
-    c.reset();
 }
 
 // Live control loop (G5.2) + FINISHED == --report bytes, against a running apex_tsp.
@@ -130,6 +135,10 @@ TEST_CASE("T_control_live_and_T_finished_matches_report_file") {
                             "\" --report \"" + rep.string() + "\" > \"" + (dir / "engine.log").string() + "\" 2>&1";
     int rc = -1;
     std::thread engine([&] { rc = std::system(cmd.c_str()); });
+    struct Joiner {
+        std::thread& t;
+        ~Joiner() { if (t.joinable()) t.join(); }  // a failed REQUIRE waits for the engine's time limit
+    } joiner{engine};
 
     auto t = connect(endpoint, 10000);
     REQUIRE(t);

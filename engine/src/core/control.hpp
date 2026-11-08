@@ -50,10 +50,13 @@ public:
     }
 
     void reset() {  // tests
-        std::lock_guard<std::mutex> lk(mu_);
-        paused_ = false;
-        cancel_ = false;
-        checkpoint_ = false;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            paused_ = false;
+            cancel_ = false;
+            checkpoint_ = false;
+        }
+        cv_.notify_all();
     }
 
 private:

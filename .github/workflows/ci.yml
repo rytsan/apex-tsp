@@ -60,6 +60,6 @@ jobs:
         run: |
           set -o pipefail
           if ! ctest --preset ${{ matrix.preset }} --output-on-failure 2>&1 | tee test.log; then
-            grep -E "ERROR|error|FAILED|TEST CASE|Assertion|runtime error" test.log | head -30 | while IFS= read -r line; do echo "::error::${line}"; done
+            { grep -E -A3 "ERROR:|runtime error|error:" test.log | head -40; grep -E "TEST CASE|test cases" test.log | head -10; } | while IFS= read -r line; do echo "::error::${line}"; done
             exit 1
           fi
