@@ -94,6 +94,7 @@ TEST_CASE("T_bnc_time_limit_anytime") {
     const auto res = apex::run_bnc(inst, g, cfg, heuristic_tour(inst, g));
     CHECK(res.lb <= 259045 + 1e-6);
     CHECK(res.lb <= res.ub + 1e-6);
+    if (std::isfinite(res.root_lb)) CHECK(res.lb >= res.root_lb - 1e-6);  // children never below their parent
     CHECK(apex::tour_cost(inst, res.best) == res.ub);
     if (res.status != apex::BnCResult::Status::Optimal) CHECK(res.status == apex::BnCResult::Status::TimeLimit);
 }

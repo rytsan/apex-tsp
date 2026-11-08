@@ -156,9 +156,12 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
             o.offers.push_back({std::move(dv.tour), "dive"});
         }
     }
-    if (prunable(r.global_lb, ub)) { o.kind = tour ? NodeOutcome::Kind::Integral : NodeOutcome::Kind::Pruned; return; }
+    // A subproblem's bound is never below its parent's: a Farley bound from truncated pricing
+    // (many negative reduced costs) can be far weaker than the bound the node inherited.
+    const double node_lb = std::max(node.dual_bound, r.global_lb);
+    if (prunable(node_lb, ub)) { o.kind = tour ? NodeOutcome::Kind::Integral : NodeOutcome::Kind::Pruned; return; }
     if (tour || !std::isfinite(r.global_lb)) {
-        node.dual_bound = std::max(node.dual_bound, r.global_lb);
+        node.dual_bound = node_lb;
         o.kind = NodeOutcome::Kind::Reopen;
         o.children.push_back(std::move(node));
         return;
@@ -179,7 +182,7 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
     }
     o.rcf_node_fixings += fixes.size();
     for (uint8_t v : {uint8_t{0}, uint8_t{1}}) {  // x_e = 1 pushed last: the dive takes it first
-        BnCNode c{0, node.depth + 1, r.global_lb, node.bounds, basis, NodeState::Open,
+        BnCNode c{0, node.depth + 1, node_lb, node.bounds, basis, NodeState::Open,
                   d.edge, v, v ? 1 - r.final.x[e] : r.final.x[e], r.lp_value};
         c.bounds.insert(c.bounds.end(), fixes.begin(), fixes.end());
         c.bounds.push_back({e, v});
