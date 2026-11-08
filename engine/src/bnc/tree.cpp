@@ -106,12 +106,30 @@ struct NodeOutcome {
     uint64_t peak_factor_nnz = 0, lp_nnz = 0;  // memory budget inputs
     uint64_t lp_iterations = 0, refactorizations = 0, cuts_sec = 0, cuts_blossom = 0, cuts_component = 0;
     uint64_t pricing_calls = 0, priced = 0, heuristic_calls = 0, strong_pivots = 0, strong_candidates = 0, rcf_node_fixings = 0;
+    TreeNodeInfo info;                   // GUI tree view (state set by Tree::apply)
+    std::vector<LpSupportEdge> support;  // node LP support, only when requested (GUI LP view)
 };
 
 // Node outcome after its cut-and-price loop. A tour whose Farley bound is still below the UB was
 // interrupted (time limit) before pricing finished: the node is reopened with its valid bound.
 void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocosts& pc, const BnCConfig& cfg,
-              const RootLoopResult& r, BnCNode& node, int64_t ub, NodeOutcome& o) {
+              const RootLoopResult& r, BnCNode& node, int64_t ub, NodeOutcome& o, bool capture_support = false) {
+    o.info.id = node.id;
+    o.info.parent = node.parent;
+    o.info.depth = node.depth;
+    o.info.branch_dir = node.branch_dir;
+    if (node.branch_edge >= 0) {
+        o.info.branch_u = g.edges[static_cast<size_t>(node.branch_edge)].u;
+        o.info.branch_v = g.edges[static_cast<size_t>(node.branch_edge)].v;
+    }
+    o.info.bound = std::max(node.dual_bound, r.global_lb);
+    o.info.lp_value = r.lp_value;
+    o.info.cuts_sec = r.cuts_sec;
+    o.info.cuts_blossom = r.cuts_blossom;
+    o.info.cuts_component = r.cuts_component;
+    if (capture_support)
+        for (size_t j = 0; j < r.final.x.size() && j < g.edges.size(); ++j)
+            if (r.final.x[j] > 1e-6) o.support.push_back({g.edges[j].u, g.edges[j].v, r.final.x[j]});
     o.lp_s += r.lp_s;
     o.sep_s += r.sep_s;
     o.pricing_s += r.pricing_s;
@@ -183,7 +201,7 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
     o.rcf_node_fixings += fixes.size();
     for (uint8_t v : {uint8_t{0}, uint8_t{1}}) {  // x_e = 1 pushed last: the dive takes it first
         BnCNode c{0, node.depth + 1, node_lb, node.bounds, basis, NodeState::Open,
-                  d.edge, v, v ? 1 - r.final.x[e] : r.final.x[e], r.lp_value};
+                  d.edge, v, v ? 1 - r.final.x[e] : r.final.x[e], r.lp_value, node.id};
         c.bounds.insert(c.bounds.end(), fixes.begin(), fixes.end());
         c.bounds.push_back({e, v});
         o.children.push_back(std::move(c));
@@ -192,7 +210,7 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
 }
 
 NodeOutcome process_node(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocosts& pc, const BnCConfig& cfg,
-                         BnCNode node, int64_t ub, double time_left) {
+                         BnCNode node, int64_t ub, double time_left, bool capture_support = false) {
     NodeOutcome o;
     NodeLimits lim = cfg.node;
     lim.cutoff = ub;
@@ -209,7 +227,7 @@ NodeOutcome process_node(const Instance& inst, CandidateGraph& g, CutLoop& loop,
     }
     o.peak_factor_nnz = r.peak_factor_nnz;
     o.lp_nnz = loop.lp().A.nnz();
-    conclude(inst, g, loop, pc, cfg, r, node, ub, o);
+    conclude(inst, g, loop, pc, cfg, r, node, ub, o, capture_support);
     return o;
 }
 
@@ -412,7 +430,7 @@ private:
         }
         BnCNode node{0, 0, std::isfinite(out_.root_lb) ? out_.root_lb : -INFINITY, {}, nullptr, NodeState::Processing};
         NodeOutcome o;
-        conclude(inst_, g_, loop_, pc_, cfg_, out_.root, node, out_.ub, o);
+        conclude(inst_, g_, loop_, pc_, cfg_, out_.root, node, out_.ub, o, tel_ && tel_->wants_lp_solution());
         apply(o, false);
         apply_root_rcf(g_, out_.root.final, out_.root_lb, out_.ub, out_.root.rcf_fixed0, out_.root.rcf_fixed1);
         rcf_pending_ = false;
@@ -440,7 +458,19 @@ private:
             }
             node = std::move(open_[pick]);
             open_.erase(open_.begin() + static_cast<std::ptrdiff_t>(pick));
-            if (prunable(node.dual_bound, out_.ub)) { ++out_.pruned; continue; }
+            if (prunable(node.dual_bound, out_.ub)) {
+                ++out_.pruned;
+                if (tel_) {
+                    TreeNodeInfo info;
+                    info.id = node.id;
+                    info.parent = node.parent;
+                    info.depth = node.depth;
+                    info.state = TreeNodeState::Pruned;
+                    info.bound = node.dual_bound;
+                    tel_->tree_node(info);
+                }
+                continue;
+            }
             ++out_.nodes;
             out_.max_depth = std::max<uint64_t>(out_.max_depth, node.depth);
             if (node.depth >= cfg_.dive_depth_limit) dive_over_ = true;  // dive went too deep: best-bound from now on
@@ -454,7 +484,8 @@ private:
         BnCNode node;
         if (!pop(node)) return;
         budget_.acquire();
-        auto o = process_node(inst_, g_, loop_, pc_, cfg_, std::move(node), out_.ub, cfg_.time_limit_s - elapsed());
+        auto o = process_node(inst_, g_, loop_, pc_, cfg_, std::move(node), out_.ub, cfg_.time_limit_s - elapsed(),
+                              tel_ && tel_->wants_lp_solution());
         budget_.release();
         note_sizes(o);
         apply(o, false);
@@ -482,12 +513,14 @@ private:
         std::vector<std::exception_ptr> err(W);
         const int64_t ub = out_.ub;
         const double left = cfg_.time_limit_s - elapsed();
+        const bool capture = tel_ && tel_->wants_lp_solution();  // last worker's LP goes to the viewer
         std::vector<std::thread> th;
         for (size_t w = 0; w < W; ++w)
             th.emplace_back([&, w] {
                 budget_.acquire();
                 try {
-                    res[w] = process_node(inst_, gs[w], *loops[w], pcs[w], cfg_, std::move(nodes[w]), ub, left);
+                    res[w] = process_node(inst_, gs[w], *loops[w], pcs[w], cfg_, std::move(nodes[w]), ub, left,
+                                          capture && w + 1 == W);
                 } catch (...) {
                     err[w] = std::current_exception();
                 }
@@ -576,18 +609,40 @@ private:
         if (out_.processing_order.size() > 1) ++(o.warm ? out_.warm_starts : out_.cold_starts);
         if (observations)
             for (const auto& ob : o.obs) pc_.observe(ob.edge, ob.dir, ob.gain);
+        auto& info = o.info;
         switch (o.kind) {
-            case NodeOutcome::Kind::Pruned: ++out_.pruned; break;
-            case NodeOutcome::Kind::Infeasible: ++out_.infeasible; break;
-            case NodeOutcome::Kind::Integral: ++out_.integral; break;
-            case NodeOutcome::Kind::Reopen: open_.push_back(std::move(o.children[0])); break;
-            case NodeOutcome::Kind::Branched:
-                for (auto& c : o.children) {
-                    c.id = next_id_++;
-                    open_.push_back(std::move(c));
-                }
-                ++out_.branched;
+            case NodeOutcome::Kind::Pruned: ++out_.pruned; info.state = TreeNodeState::Pruned; break;
+            case NodeOutcome::Kind::Infeasible: ++out_.infeasible; info.state = TreeNodeState::Infeasible; break;
+            case NodeOutcome::Kind::Integral: ++out_.integral; info.state = TreeNodeState::Integral; break;
+            case NodeOutcome::Kind::Reopen:
+                info.state = TreeNodeState::Reopened;
+                open_.push_back(std::move(o.children[0]));
                 break;
+            case NodeOutcome::Kind::Branched:
+                info.state = TreeNodeState::Branched;
+                for (auto& c : o.children) c.id = next_id_++;
+                break;
+        }
+        if (tel_) {
+            if (!o.support.empty()) tel_->lp_solution(o.support);
+            tel_->tree_node(info);
+        }
+        if (o.kind == NodeOutcome::Kind::Branched) {
+            for (auto& c : o.children) {
+                if (tel_) {
+                    TreeNodeInfo ci;
+                    ci.id = c.id;
+                    ci.parent = c.parent;
+                    ci.depth = c.depth;
+                    ci.branch_dir = c.branch_dir;
+                    ci.branch_u = g_.edges[static_cast<size_t>(c.branch_edge)].u;
+                    ci.branch_v = g_.edges[static_cast<size_t>(c.branch_edge)].v;
+                    ci.bound = c.dual_bound;
+                    tel_->tree_node(ci);
+                }
+                open_.push_back(std::move(c));
+            }
+            ++out_.branched;
         }
     }
 
@@ -614,8 +669,10 @@ private:
     }
 
     void progress() {
-        if (tel_ && out_.nodes / 1000 != last_progress_) {
+        // Every 1000 nodes or every second (live LB for the viewer).
+        if (tel_ && (out_.nodes / 1000 != last_progress_ || Clock::now() - last_progress_t_ >= std::chrono::seconds(1))) {
             last_progress_ = out_.nodes / 1000;
+            last_progress_t_ = Clock::now();
             double lb = static_cast<double>(out_.ub);
             for (const auto& nd : open_) lb = std::min(lb, nd.dual_bound);
             tel_->event("tree_progress", {{"nodes", std::to_string(out_.nodes)}, {"open", std::to_string(open_.size())},
@@ -805,6 +862,7 @@ private:
     Clock::time_point t0_, last_ckpt_;
     double elapsed0_ = 0;
     uint64_t last_progress_ = 0;
+    Clock::time_point last_progress_t_{};
     NodeBasis last_worker_basis_;
 };
 

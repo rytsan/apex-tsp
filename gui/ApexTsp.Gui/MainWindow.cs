@@ -94,6 +94,7 @@ public sealed class MainWindow : Window
                 c.TourUpdate += (_, _) => ReadTour();
                 c.Finished += j => Dispatcher.UIThread.Post(() => OnFinished(j));
                 c.Closed += r => Dispatcher.UIThread.Post(() => _vm.OnClosed(r));
+                c.Start();
                 Dispatcher.UIThread.Post(() =>
                 {
                     _client = c;

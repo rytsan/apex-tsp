@@ -21,7 +21,7 @@ static_assert(std::endian::native == std::endian::little, "wire format assumes a
 
 namespace apex::ipc {
 
-inline constexpr uint16_t kProtocolVersion = 2;
+inline constexpr uint16_t kProtocolVersion = 3;  // v3: typed solver events (Sprint 6 M6.1)
 inline constexpr uint16_t kProtocolMin = 2;
 inline constexpr uint32_t kHeaderBytes = 8;                 // u32 length + u16 version + u8 type + u8 flags
 inline constexpr uint32_t kMaxFrameBytes = 64u << 20;       // larger length fields are malformed
@@ -43,7 +43,18 @@ enum class MsgType : uint8_t {
     ClusterMap = 0x22, // payload: u32 count + count x {u32 cluster_id, u8 state}
     Log = 0x23,        // payload: UTF-8 line
     Finished = 0x24,   // payload: the --report JSON, byte-identical
+    // v3, engine -> GUI (sent only when the negotiated version is >= 3)
+    LpSolution = 0x25, // payload: u64 seq + u32 count + count x LpEdgeWire (support of the current LP)
+    CutRound = 0x26,   // payload: CutRoundPacket
+    TreeNode = 0x27,   // payload: TreeNodePacket
+    Event = 0x28,      // payload: EventHeader + UTF-8 detail (<= 256 bytes)
+    // v3, GUI -> engine: payload u64 seq + UTF-8 command line ("heuristic two_opt ..."); Ack(seq)
+    Command = 0x15,
 };
+// Lowest protocol version that knows `t` (the server never sends a type the peer does not know).
+inline constexpr uint16_t first_version(MsgType t) {
+    return (t >= MsgType::LpSolution && t <= MsgType::Event) || t == MsgType::Command ? 3 : 2;
+}
 bool known_type(uint8_t t);
 bool is_control(MsgType t);
 bool payload_size_ok(MsgType t, size_t payload_bytes);
@@ -59,7 +70,8 @@ struct Frame {
 
 // length = bytes after the length field (4 header bytes + payload + 4 if CRC).
 std::vector<uint8_t> encode(const Frame& f);
-std::vector<uint8_t> encode(MsgType t, std::span<const uint8_t> payload, bool with_crc = false);
+std::vector<uint8_t> encode(MsgType t, std::span<const uint8_t> payload, bool with_crc = false,
+                            uint16_t version = kProtocolVersion);
 
 // Streaming decoder. A header is accepted only if length is in range, version is in
 // [kProtocolMin, kProtocolVersion], the type is known, no unknown flag bit is set and the
@@ -108,7 +120,59 @@ struct TelemetryPacket {
 };
 #pragma pack(pop)
 static_assert(sizeof(TelemetryPacket) == 120, "TelemetryPacket layout is part of the protocol");
-inline constexpr uint64_t kTelemetryMagic = (uint64_t{0x41545350} << 32) | kProtocolVersion;  // "ATSP"
+// Packet layout version (2), independent of the frame protocol version.
+inline constexpr uint64_t kTelemetryMagic = (uint64_t{0x41545350} << 32) | 2;  // "ATSP"
+
+#pragma pack(push, 1)
+struct LpEdgeWire {
+    uint32_t u, v;
+    float x;
+};
+static_assert(sizeof(LpEdgeWire) == 12);
+inline constexpr uint32_t kMaxLpEdges = 1u << 20;
+
+// One separation round of the cut loop (root or a serial tree node).
+struct CutRoundPacket {
+    uint64_t timestamp_us;
+    uint32_t round;
+    uint32_t rows;
+    double lp_value;
+    uint32_t sec, blossom, component, pool;  // found this round; pool = reactivated from the pool
+    uint32_t aged;                           // rows that left the LP
+    uint32_t lp_iterations;
+    float lp_s, sep_s;
+};
+static_assert(sizeof(CutRoundPacket) == 56);
+
+struct TreeNodePacket {
+    uint64_t timestamp_us;
+    uint32_t id, parent, depth;   // parent = UINT32_MAX for the root
+    uint8_t state;                // apex::TreeNodeState (app/telemetry.hpp)
+    uint8_t branch_dir;           // x_e = dir on the edge that created this node
+    uint32_t branch_u, branch_v;  // UINT32_MAX for the root
+    double bound;                 // node bound (LP / Farley); NaN while open and unsolved
+    double lp_value;
+    uint32_t cuts_sec, cuts_blossom, cuts_component;
+};
+static_assert(sizeof(TreeNodePacket) == 58);
+
+enum class EventKind : uint8_t {
+    UbImproved,      // detail: source (construct, two_opt, polish, ils, dive, lp_guided, lp_integral, rih, ...)
+    LbImproved,      // detail: lp | lagrangian
+    Phase,           // detail: phase name
+    NoViolatedCuts,  // separation found nothing this round
+    TailingOff,
+    Rcf,             // value: edges fixed so far
+    Proven,          // LB == UB
+};
+struct EventHeader {
+    uint64_t timestamp_us;
+    double value;
+    uint8_t kind;  // EventKind
+    uint8_t heuristic;  // 1: value from a heuristic (no bound), 0: bound or exact
+};
+static_assert(sizeof(EventHeader) == 18);
+#pragma pack(pop)
 
 struct Hello {
     uint16_t version = kProtocolVersion;
@@ -144,13 +208,13 @@ private:
     double ub_ = 0, lb_ = 0;
 };
 
-// Outgoing queue of the server thread. Coalescing channels (telemetry, tour update, cluster map)
+// Outgoing queue of the server thread. Coalescing channels (telemetry, tour update, cluster map, LP solution)
 // keep only their newest pending frame: max one in flight per channel. Other frames (log, ack,
 // finished, close) are FIFO up to `capacity`; beyond that they are dropped and counted. push()
 // never waits for the consumer.
 class OutQueue {
 public:
-    explicit OutQueue(size_t capacity = 256) : cap_(capacity) {}
+    explicit OutQueue(size_t capacity = 4096) : cap_(capacity) {}
     bool push(Frame f);                           // false = dropped
     std::optional<Frame> pop(std::chrono::milliseconds wait);
     void close();
@@ -162,8 +226,9 @@ private:
     std::mutex mu_;
     std::condition_variable cv_;
     std::deque<Frame> fifo_;
-    std::optional<Frame> latest_[3];
-    uint64_t order_ = 0, latest_order_[3] = {0, 0, 0};
+    static constexpr int kSlots = 4;  // telemetry, tour update, cluster map, LP solution
+    std::optional<Frame> latest_[kSlots];
+    uint64_t order_ = 0, latest_order_[kSlots] = {};
     size_t cap_;
     bool closed_ = false;
     std::atomic<uint64_t> dropped_{0}, coalesced_{0};

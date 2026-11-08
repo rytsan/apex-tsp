@@ -25,6 +25,9 @@ struct ServerConfig {
     TelemetrySink* forward = nullptr;  // events are also passed here (stdout log)
     std::function<bool()> on_checkpoint;  // CHECKPOINT: runs on the server thread after the ACK (true = written)
     double tour_interval_s = 0.5;    // SharedTour rewrite cadence (publish_tour without force)
+    double lp_interval_s = 0.5;      // LP_SOLUTION cadence (v3 peers)
+    // COMMAND (v3): runs on the server thread after the ACK; returns the LOG line to send back.
+    std::function<std::string(std::string_view)> on_command;
 };
 
 // Engine IPC server (M5.2): one client at a time, handshake first, then control in and
@@ -44,6 +47,10 @@ public:
     uint64_t shutdown_requested() const { return shutdown_.load(std::memory_order_acquire); }
 
     void event(std::string_view name, std::initializer_list<KV> fields) override;
+    bool wants_lp_solution() override;
+    void lp_solution(const std::vector<LpSupportEdge>& edges) override;
+    void tree_node(const TreeNodeInfo& n) override;
+    uint16_t peer_version() const { return version_.load(std::memory_order_acquire); }
     // Rewrites the SharedTour (at most every tour_interval_s unless force) and queues TOUR_UPDATE.
     void publish_tour(const Tour& t, bool force = false);
     // Cluster map (scalable mode): state 0 idle, 1 solving, 2 patching; sent at most once per second.
@@ -58,6 +65,9 @@ private:
     bool handshake(Transport& t, FrameDecoder& dec);
     void handle(Transport& t, const Frame& f);
     void push_telemetry_locked(bool force);
+    void push_event(uint8_t kind, double value, bool heuristic, std::string_view detail);
+    uint64_t now_us() const;
+    std::vector<uint8_t> enc(MsgType t, std::span<const uint8_t> payload) const;
     void flush_clusters(bool force);
 
     ServerConfig cfg_;
@@ -68,6 +78,11 @@ private:
     std::thread th_;
     std::atomic<bool> stop_{false}, connected_{false}, finished_sent_{false};
     std::atomic<uint64_t> shutdown_{0};
+    std::atomic<uint16_t> version_{0};   // negotiated with the connected client (0: none)
+    std::atomic<int64_t> last_lp_us_{-1000000000};
+    uint64_t lp_seq_ = 0;
+    bool proven_sent_ = false;
+    std::atomic<bool> tree_started_{false};
 
     std::mutex state_mu_;            // telemetry state + throttle
     TelemetryPacket pkt_{};

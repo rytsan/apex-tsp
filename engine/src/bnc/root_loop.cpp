@@ -328,6 +328,12 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
                                       {"pool", std::to_string(log.reactivated)}, {"aged", std::to_string(log.aged_out)},
                                       {"iters", std::to_string(log.lp_iterations)}, {"lp_s", fmt(log.lp_s)},
                                       {"sep_s", fmt(log.sep_s)}});
+        if (tel_ && tel_->wants_lp_solution()) {  // GUI LP view: support of this round's LP
+            std::vector<LpSupportEdge> sup_edges;
+            for (size_t j = 0; j < res.x.size() && j < g_.edges.size(); ++j)
+                if (res.x[j] > 1e-6) sup_edges.push_back({g_.edges[j].u, g_.edges[j].v, res.x[j]});
+            tel_->lp_solution(sup_edges);
+        }
         double glb = -INFINITY;
         const size_t new_cols = cfg_.compute_global_bound ? price(res, glb, out, false) : 0;
         out.rounds.back().global_lb = glb;

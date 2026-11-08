@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.IO.MemoryMappedFiles;
 using System.IO.Pipes;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 
 namespace ApexTsp.Ipc;
 
@@ -26,6 +27,12 @@ public sealed class EngineClient : IDisposable
     public event Action<string>? Finished;                  // report JSON
     public event Action<ulong>? Ack;
     public event Action<string>? Closed;                    // reason
+    // v3 (negotiated version >= 3)
+    public event Action<ulong, LpEdge[]>? LpSolution;       // seq, support edges
+    public event Action<CutRoundPacket>? CutRound;
+    public event Action<TreeNodePacket>? TreeNode;
+    public event Action<SolverEvent>? SolverEvent;
+    public ushort NegotiatedVersion { get; private set; }
 
     private EngineClient(Stream stream, IDisposable? owner, Hello engine)
     {
@@ -35,7 +42,7 @@ public sealed class EngineClient : IDisposable
         _reader = new Thread(ReadLoop) { IsBackground = true, Name = "apex-ipc-reader" };
     }
 
-    // Connects, exchanges Hello, starts the reader. Throws on timeout or version mismatch.
+    // Connects and exchanges Hello; Start() begins reading. Throws on timeout or version mismatch.
     public static EngineClient Connect(string endpoint, TimeSpan timeout, uint guiCapabilities = 1)
     {
         var (stream, owner) = OpenStream(endpoint, timeout);
@@ -59,16 +66,21 @@ public sealed class EngineClient : IDisposable
             }
         }
         var mine = new Hello { GuiCapabilities = guiCapabilities };
-        if (Protocol.Negotiate(engine.Value, mine) == 0)
+        var negotiated = Protocol.Negotiate(engine.Value, mine);
+        if (negotiated == 0)
             throw new IOException($"version mismatch: engine {engine.Value.ProtocolMin}..{engine.Value.Version}, gui {mine.ProtocolMin}..{mine.Version}");
-        var w = Protocol.Encode(MsgType.Hello, Protocol.Pack(mine));
+        // Hello carries the lowest version in its header, so any supported engine decodes it.
+        var w = Protocol.Encode(MsgType.Hello, Protocol.Pack(mine), version: Protocol.VersionMin);
         stream.Write(w, 0, w.Length);
         stream.Flush();
-        var c = new EngineClient(stream, owner, engine.Value);
+        var c = new EngineClient(stream, owner, engine.Value) { NegotiatedVersion = negotiated };
         c._pending = dec;
-        c._reader.Start();
         return c;
     }
+
+    // Starts the reader thread. Call after subscribing to the events: frames the engine queued
+    // before the connection (early phases, first UB) are dispatched first and would be lost otherwise.
+    public void Start() => _reader.Start();
 
     private FrameDecoder _pending = new();
 
@@ -103,13 +115,30 @@ public sealed class EngineClient : IDisposable
     {
         if (!Protocol.IsControl(control)) throw new ArgumentException("not a control message", nameof(control));
         var seq = Interlocked.Increment(ref _seq);
-        var w = Protocol.Encode(control, Protocol.PackU64(seq), withCrc: true);
+        Write(Protocol.Encode(control, Protocol.PackU64(seq), withCrc: true, version: NegotiatedVersion));
+        return seq;
+    }
+
+    // v3 command line (e.g. "heuristic two_opt"); answered with Ack(seq) and a Log line. Returns seq.
+    public ulong SendCommand(string command)
+    {
+        if (NegotiatedVersion < 3) throw new InvalidOperationException("engine speaks protocol " + NegotiatedVersion + ", commands need 3");
+        var seq = Interlocked.Increment(ref _seq);
+        var text = System.Text.Encoding.UTF8.GetBytes(command);
+        var payload = new byte[8 + text.Length];
+        BinaryPrimitives.WriteUInt64LittleEndian(payload, seq);
+        text.CopyTo(payload, 8);
+        Write(Protocol.Encode(MsgType.Command, payload, withCrc: true, version: NegotiatedVersion));
+        return seq;
+    }
+
+    private void Write(byte[] w)
+    {
         lock (_writeLock)
         {
             _stream.Write(w, 0, w.Length);
             _stream.Flush();
         }
-        return seq;
     }
 
     private void ReadLoop()
@@ -160,7 +189,41 @@ public sealed class EngineClient : IDisposable
             case MsgType.Close:
                 Closed?.Invoke(System.Text.Encoding.UTF8.GetString(f.Payload));
                 break;
+            case MsgType.LpSolution:
+                LpSolution?.Invoke(BinaryPrimitives.ReadUInt64LittleEndian(f.Payload), ParseLpSolution(f.Payload));
+                break;
+            case MsgType.CutRound:
+                CutRound?.Invoke(MemoryMarshal.Read<CutRoundPacket>(f.Payload));
+                break;
+            case MsgType.TreeNode:
+                TreeNode?.Invoke(MemoryMarshal.Read<TreeNodePacket>(f.Payload));
+                break;
+            case MsgType.Event:
+                SolverEvent?.Invoke(ParseEvent(f.Payload));
+                break;
         }
+    }
+
+    public static LpEdge[] ParseLpSolution(ReadOnlySpan<byte> p)
+    {
+        if (p.Length < 12) return [];
+        var n = BinaryPrimitives.ReadUInt32LittleEndian(p[8..]);
+        if (p.Length != 12 + 12L * n) return [];
+        var e = new LpEdge[n];
+        for (var i = 0; i < n; ++i)
+        {
+            var o = 12 + 12 * i;
+            e[i] = new LpEdge(BinaryPrimitives.ReadUInt32LittleEndian(p[o..]), BinaryPrimitives.ReadUInt32LittleEndian(p[(o + 4)..]),
+                              BinaryPrimitives.ReadSingleLittleEndian(p[(o + 8)..]));
+        }
+        return e;
+    }
+
+    public static SolverEvent ParseEvent(ReadOnlySpan<byte> p)
+    {
+        var h = MemoryMarshal.Read<EventHeader>(p);
+        var detail = System.Text.Encoding.UTF8.GetString(p[Marshal.SizeOf<EventHeader>()..]);
+        return new SolverEvent((EventKind)h.Kind, h.TimestampUs / 1e6, h.Value, h.Heuristic != 0, detail);
     }
 
     public static IReadOnlyList<ClusterEntry> ParseClusterMap(ReadOnlySpan<byte> p)

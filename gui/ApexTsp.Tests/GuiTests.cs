@@ -46,6 +46,10 @@ public class ProtocolTests
         int Grab(string pattern) => int.Parse(Regex.Match(hpp, pattern).Groups[1].Value);
         Assert.Equal(Grab(@"sizeof\(TelemetryPacket\) == (\d+)"), Marshal.SizeOf<TelemetryPacket>());
         Assert.Equal(Grab(@"sizeof\(SharedTourHeader\) == (\d+)"), Marshal.SizeOf<SharedTourHeader>());
+        Assert.Equal(Grab(@"sizeof\(CutRoundPacket\) == (\d+)"), Marshal.SizeOf<CutRoundPacket>());
+        Assert.Equal(Grab(@"sizeof\(TreeNodePacket\) == (\d+)"), Marshal.SizeOf<TreeNodePacket>());
+        Assert.Equal(Grab(@"sizeof\(EventHeader\) == (\d+)"), Marshal.SizeOf<EventHeader>());
+        Assert.Equal(12, Grab(@"sizeof\(LpEdgeWire\) == (\d+)"));
         Assert.Equal(Protocol.HelloBytes, Grab(@"kHelloBytes = (\d+)"));
         Assert.Equal(Protocol.HeaderBytes, Grab(@"kHeaderBytes = (\d+)"));
         Assert.Equal(Protocol.Version, Grab(@"kProtocolVersion = (\d+)"));
@@ -100,6 +104,7 @@ public class ProtocolTests
         var telemetry = 0;
         c.Telemetry += _ => Interlocked.Increment(ref telemetry);
         c.Finished += j => finished.TrySetResult(j);
+        c.Start();
         var json = await finished.Task.WaitAsync(TimeSpan.FromSeconds(60));
         await engine.WaitForExitAsync(new CancellationTokenSource(10000).Token);
         Assert.Equal(File.ReadAllText(report), json);
@@ -111,6 +116,49 @@ public class ProtocolTests
         Assert.Equal(280, n);
         Assert.Equal(280, buf.Take(n).Distinct().Count());
         Assert.True(epoch % 2 == 0 && epoch > 0);
+        dir.Delete(true);
+    }
+
+    // v3 solver view against the real engine: tree, cuts, LP support and provenance events.
+    [Fact]
+    public async Task T_client_v3_solver_events()
+    {
+        var dir = Directory.CreateTempSubdirectory("apex_gui_v3_");
+        var endpoint = OperatingSystem.IsWindows() ? "apex_gui_v3_" + Environment.ProcessId : Path.Combine(dir.FullName, "e.sock");
+        var psi = new ProcessStartInfo(Repo.EngineBinary()) { UseShellExecute = false, RedirectStandardOutput = true };
+        foreach (var a in new[] { "--instance", Path.Combine(Repo.Root, "data", "a280.tsp"), "--mode", "exact", "--ipc", endpoint })
+            psi.ArgumentList.Add(a);
+        using var engine = Process.Start(psi)!;
+        engine.OutputDataReceived += (_, _) => { };
+        engine.BeginOutputReadLine();
+        using var c = EngineClient.Connect(endpoint, TimeSpan.FromSeconds(20));
+        Assert.Equal(3, c.NegotiatedVersion);
+        var nodes = new List<TreeNodePacket>();
+        var cuts = new List<CutRoundPacket>();
+        var events = new List<SolverEvent>();
+        var lpViews = 0;
+        var lpOk = true;
+        c.TreeNode += n => { lock (nodes) nodes.Add(n); };
+        c.CutRound += r => { lock (cuts) cuts.Add(r); };
+        c.SolverEvent += e => { lock (events) events.Add(e); };
+        c.LpSolution += (_, e) =>
+        {
+            Interlocked.Increment(ref lpViews);
+            if (e.Length == 0 || e.Any(x => x.U >= 280 || x.V >= 280 || x.X <= 0 || x.X > 1.0001f)) lpOk = false;
+        };
+        var finished = new TaskCompletionSource<string>();
+        c.Finished += j => finished.TrySetResult(j);
+        c.Start();
+        await finished.Task.WaitAsync(TimeSpan.FromSeconds(60));
+        await engine.WaitForExitAsync(new CancellationTokenSource(10000).Token);
+        Assert.Contains(nodes, n => n.Id == 0 && n.Parent == uint.MaxValue);
+        Assert.NotEmpty(cuts);
+        Assert.Contains(cuts, r => r.Sec + r.Blossom + r.Component > 0);
+        Assert.True(lpViews >= 1 && lpOk);
+        Assert.Contains(events, e => e.Kind == EventKind.UbImproved && e.Heuristic);
+        Assert.Contains(events, e => e.Kind == EventKind.LbImproved && e.Detail == "lp");
+        Assert.Contains(events, e => e.Kind == EventKind.Proven && e.Value == 2579);
+        Assert.Contains(events, e => e.Kind == EventKind.Phase && e.Detail == "bnc");
         dir.Delete(true);
     }
 }

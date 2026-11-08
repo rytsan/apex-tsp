@@ -6,13 +6,18 @@ namespace ApexTsp.Ipc;
 // Mirror of engine/src/ipc/protocol.hpp (Sprint 5 M5.1). Little-endian wire format.
 public static class Protocol
 {
-    public const ushort Version = 2;
+    public const ushort Version = 3;  // v3: typed solver events (Sprint 6 M6.1)
     public const ushort VersionMin = 2;
     public const int HeaderBytes = 8;          // u32 length + u16 version + u8 type + u8 flags
     public const uint MaxFrameBytes = 64u << 20;
     public const byte FlagCrc = 0x01;
     public const int HelloBytes = 17;
-    public const ulong TelemetryMagic = (0x41545350UL << 32) | Version;  // "ATSP"
+    public const ulong TelemetryMagic = (0x41545350UL << 32) | 2;  // "ATSP", packet layout 2
+    public const uint MaxLpEdges = 1u << 20;
+
+    // Lowest protocol version that knows the type (same as first_version in the engine).
+    public static ushort FirstVersion(MsgType t) =>
+        t is >= MsgType.LpSolution and <= MsgType.Event or MsgType.Command ? (ushort)3 : (ushort)2;
 
     public static bool KnownType(byte t) => Enum.IsDefined((MsgType)t);
     public static bool IsControl(MsgType t) => t >= MsgType.Pause && t <= MsgType.Shutdown;
@@ -27,15 +32,20 @@ public static class Protocol
         MsgType.Close => n <= 4096,
         MsgType.Log => n <= 65536,
         MsgType.ClusterMap or MsgType.Finished => n <= MaxFrameBytes - 8,
+        MsgType.LpSolution => n >= 12 && (n - 12) % 12 == 0 && (n - 12) / 12 <= MaxLpEdges,
+        MsgType.CutRound => n == Marshal.SizeOf<CutRoundPacket>(),
+        MsgType.TreeNode => n == Marshal.SizeOf<TreeNodePacket>(),
+        MsgType.Event => n >= Marshal.SizeOf<EventHeader>() && n <= Marshal.SizeOf<EventHeader>() + 256,
+        MsgType.Command => n is >= 8 and <= 8 + 4096,
         _ => false,
     };
 
-    public static byte[] Encode(MsgType type, ReadOnlySpan<byte> payload, bool withCrc = false)
+    public static byte[] Encode(MsgType type, ReadOnlySpan<byte> payload, bool withCrc = false, ushort version = Version)
     {
         var len = 4 + payload.Length + (withCrc ? 4 : 0);
         var b = new byte[4 + len];
         BinaryPrimitives.WriteUInt32LittleEndian(b, (uint)len);
-        BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(4), Version);
+        BinaryPrimitives.WriteUInt16LittleEndian(b.AsSpan(4), version);
         b[6] = (byte)type;
         b[7] = withCrc ? FlagCrc : (byte)0;
         payload.CopyTo(b.AsSpan(HeaderBytes));
@@ -107,6 +117,54 @@ public enum MsgType : byte
     ClusterMap = 0x22,
     Log = 0x23,
     Finished = 0x24,
+    LpSolution = 0x25,
+    CutRound = 0x26,
+    TreeNode = 0x27,
+    Event = 0x28,
+    Command = 0x15,
+}
+
+public enum TreeNodeState : byte { Open, Pruned, Infeasible, Integral, Branched, Reopened }
+
+public enum EventKind : byte { UbImproved, LbImproved, Phase, NoViolatedCuts, TailingOff, Rcf, Proven }
+
+public readonly record struct LpEdge(uint U, uint V, float X);
+
+public sealed record SolverEvent(EventKind Kind, double Seconds, double Value, bool Heuristic, string Detail);
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct CutRoundPacket
+{
+    public ulong TimestampUs;
+    public uint Round;
+    public uint Rows;
+    public double LpValue;
+    public uint Sec, Blossom, Component, Pool;
+    public uint Aged;
+    public uint LpIterations;
+    public float LpS, SepS;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct TreeNodePacket
+{
+    public ulong TimestampUs;
+    public uint Id, Parent, Depth;
+    public byte State;
+    public byte BranchDir;
+    public uint BranchU, BranchV;
+    public double Bound;
+    public double LpValue;
+    public uint CutsSec, CutsBlossom, CutsComponent;
+}
+
+[StructLayout(LayoutKind.Sequential, Pack = 1)]
+public struct EventHeader
+{
+    public ulong TimestampUs;
+    public double Value;
+    public byte Kind;
+    public byte Heuristic;
 }
 
 public sealed record Frame(ushort Version, MsgType Type, byte Flags, byte[] Payload);

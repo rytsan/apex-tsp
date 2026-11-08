@@ -50,7 +50,8 @@ bool known_type(uint8_t t) {
         case MsgType::Hello: case MsgType::Close: case MsgType::Pause: case MsgType::Resume:
         case MsgType::Cancel: case MsgType::Checkpoint: case MsgType::Shutdown: case MsgType::Ack:
         case MsgType::Telemetry: case MsgType::TourUpdate: case MsgType::ClusterMap: case MsgType::Log:
-        case MsgType::Finished:
+        case MsgType::Finished: case MsgType::LpSolution: case MsgType::CutRound: case MsgType::TreeNode:
+        case MsgType::Event: case MsgType::Command:
             return true;
     }
     return false;
@@ -69,6 +70,11 @@ bool payload_size_ok(MsgType t, size_t n) {
         case MsgType::Close: return n <= 4096;
         case MsgType::Log: return n <= 65536;
         case MsgType::ClusterMap: case MsgType::Finished: return n <= kMaxFrameBytes - 8;
+        case MsgType::LpSolution: return n >= 12 && (n - 12) % sizeof(LpEdgeWire) == 0 && (n - 12) / sizeof(LpEdgeWire) <= kMaxLpEdges;
+        case MsgType::CutRound: return n == sizeof(CutRoundPacket);
+        case MsgType::TreeNode: return n == sizeof(TreeNodePacket);
+        case MsgType::Event: return n >= sizeof(EventHeader) && n <= sizeof(EventHeader) + 256;
+        case MsgType::Command: return n >= 8 && n <= 8 + 4096;
     }
     return false;
 }
@@ -82,12 +88,12 @@ uint32_t crc32(std::span<const uint8_t> data, uint32_t crc) {
     return ~crc;
 }
 
-std::vector<uint8_t> encode(MsgType t, std::span<const uint8_t> payload, bool with_crc) {
+std::vector<uint8_t> encode(MsgType t, std::span<const uint8_t> payload, bool with_crc, uint16_t version) {
     std::vector<uint8_t> b;
     const uint32_t len = 4 + static_cast<uint32_t>(payload.size()) + (with_crc ? 4 : 0);
     b.reserve(4 + len);
     put_u32(b, len);
-    put_u16(b, kProtocolVersion);
+    put_u16(b, version);
     b.push_back(static_cast<uint8_t>(t));
     b.push_back(with_crc ? kFlagCrc : 0);
     b.insert(b.end(), payload.begin(), payload.end());
@@ -95,7 +101,7 @@ std::vector<uint8_t> encode(MsgType t, std::span<const uint8_t> payload, bool wi
     return b;
 }
 
-std::vector<uint8_t> encode(const Frame& f) { return encode(f.type, f.payload, (f.flags & kFlagCrc) != 0); }
+std::vector<uint8_t> encode(const Frame& f) { return encode(f.type, f.payload, (f.flags & kFlagCrc) != 0, f.version); }
 
 void FrameDecoder::feed(std::span<const uint8_t> bytes) {
     if (pos_ > 0 && pos_ * 2 >= buf_.size()) {  // compact
@@ -214,6 +220,7 @@ int OutQueue::slot(MsgType t) {
         case MsgType::Telemetry: return 0;
         case MsgType::TourUpdate: return 1;
         case MsgType::ClusterMap: return 2;
+        case MsgType::LpSolution: return 3;
         default: return -1;
     }
 }
@@ -239,7 +246,7 @@ bool OutQueue::push(Frame f) {
 
 std::optional<Frame> OutQueue::pop(std::chrono::milliseconds wait) {
     std::unique_lock<std::mutex> lk(mu_);
-    auto ready = [&] { return closed_ || !fifo_.empty() || latest_[0] || latest_[1] || latest_[2]; };
+    auto ready = [&] { return closed_ || !fifo_.empty() || latest_[0] || latest_[1] || latest_[2] || latest_[3]; };
     if (!cv_.wait_for(lk, wait, ready)) return std::nullopt;
     // Oldest coalesced slot first, unless the FIFO has anything; FIFO frames are rare and small.
     if (!fifo_.empty()) {
@@ -248,7 +255,7 @@ std::optional<Frame> OutQueue::pop(std::chrono::milliseconds wait) {
         return f;
     }
     int best = -1;
-    for (int s = 0; s < 3; ++s)
+    for (int s = 0; s < kSlots; ++s)
         if (latest_[s] && (best < 0 || latest_order_[s] < latest_order_[best])) best = s;
     if (best < 0) return std::nullopt;  // closed and empty
     Frame f = std::move(*latest_[best]);

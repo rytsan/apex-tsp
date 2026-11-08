@@ -25,6 +25,7 @@ struct BnCNode {
     int64_t branch_edge = -1;
     uint8_t branch_dir = 0;
     double branch_frac = 0, parent_lp = 0;
+    uint32_t parent = UINT32_MAX;  // GUI tree view only (not checkpointed)
 };
 
 class BackgroundIls;

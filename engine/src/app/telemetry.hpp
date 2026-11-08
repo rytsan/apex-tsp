@@ -1,21 +1,45 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace apex {
 
 using KV = std::pair<std::string_view, std::string>;
 
-// Telemetry events. Log-backed now; pipe-backed implementation arrives in Sprint 5.
+struct LpSupportEdge {
+    uint32_t u, v;
+    double x;
+};
+
+enum class TreeNodeState : uint8_t { Open, Pruned, Infeasible, Integral, Branched, Reopened };
+
+struct TreeNodeInfo {
+    uint32_t id = 0, parent = UINT32_MAX, depth = 0;
+    TreeNodeState state = TreeNodeState::Open;
+    uint8_t branch_dir = 0;
+    uint32_t branch_u = UINT32_MAX, branch_v = UINT32_MAX;
+    double bound = 0, lp_value = 0;
+    uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0;
+};
+
+// Telemetry events: key=value events (log / IPC), plus typed solver views for the GUI (Sprint 6
+// M6.1) that the log sink ignores. Typed hooks are called only from the solver's master thread.
 class TelemetrySink {
 public:
     virtual ~TelemetrySink() = default;
     virtual void event(std::string_view name, std::initializer_list<KV> fields) = 0;
+    // True when a viewer wants the next LP support (rate-limited by the sink): callers build the
+    // support only then.
+    virtual bool wants_lp_solution() { return false; }
+    virtual void lp_solution(const std::vector<LpSupportEdge>&) {}
+    virtual void tree_node(const TreeNodeInfo&) {}
 };
 
 // One `key=value` line per event, written with a single fwrite + fflush.

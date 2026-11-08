@@ -69,8 +69,103 @@ IpcServer::~IpcServer() {
 
 // ---- engine side --------------------------------------------------------------------------
 
+uint64_t IpcServer::now_us() const {
+    return static_cast<uint64_t>(std::chrono::duration<double, std::micro>(Clock::now() - t0_).count());
+}
+
+std::vector<uint8_t> IpcServer::enc(MsgType t, std::span<const uint8_t> payload) const {
+    const uint16_t v = version_.load(std::memory_order_acquire);
+    return encode(t, payload, false, v ? v : kProtocolMin);
+}
+
+template <class T>
+static std::vector<uint8_t> bytes_of(const T& v) {
+    const auto* p = reinterpret_cast<const uint8_t*>(&v);
+    return {p, p + sizeof(T)};
+}
+
+void IpcServer::push_event(uint8_t kind, double value, bool heuristic, std::string_view detail) {
+    EventHeader h{now_us(), value, kind, static_cast<uint8_t>(heuristic ? 1 : 0)};
+    auto p = bytes_of(h);
+    p.insert(p.end(), detail.begin(), detail.begin() + static_cast<std::ptrdiff_t>(std::min<size_t>(detail.size(), 256)));
+    queue_.push(make(MsgType::Event, std::move(p)));
+}
+
+bool IpcServer::wants_lp_solution() {
+    if (peer_version() < 3) return false;
+    const auto now = static_cast<int64_t>(now_us());
+    auto last = last_lp_us_.load(std::memory_order_relaxed);
+    if (now - last < static_cast<int64_t>(cfg_.lp_interval_s * 1e6)) return false;
+    return last_lp_us_.compare_exchange_strong(last, now, std::memory_order_relaxed);
+}
+
+void IpcServer::lp_solution(const std::vector<LpSupportEdge>& edges) {
+    const auto n = static_cast<uint32_t>(std::min<size_t>(edges.size(), kMaxLpEdges));
+    std::vector<uint8_t> p = pack_u64(++lp_seq_);
+    p.reserve(12 + size_t{n} * sizeof(LpEdgeWire));
+    for (int i = 0; i < 4; ++i) p.push_back(static_cast<uint8_t>(n >> (8 * i)));
+    for (uint32_t k = 0; k < n; ++k) {
+        const LpEdgeWire w{edges[k].u, edges[k].v, static_cast<float>(edges[k].x)};
+        const auto* b = reinterpret_cast<const uint8_t*>(&w);
+        p.insert(p.end(), b, b + sizeof w);
+    }
+    queue_.push(make(MsgType::LpSolution, std::move(p)));
+}
+
+void IpcServer::tree_node(const TreeNodeInfo& n) {
+    tree_started_.store(true, std::memory_order_release);
+    TreeNodePacket t{};
+    t.timestamp_us = now_us();
+    t.id = n.id;
+    t.parent = n.parent;
+    t.depth = n.depth;
+    t.state = static_cast<uint8_t>(n.state);
+    t.branch_dir = n.branch_dir;
+    t.branch_u = n.branch_u;
+    t.branch_v = n.branch_v;
+    t.bound = n.bound;
+    t.lp_value = n.lp_value;
+    t.cuts_sec = static_cast<uint32_t>(n.cuts_sec);
+    t.cuts_blossom = static_cast<uint32_t>(n.cuts_blossom);
+    t.cuts_component = static_cast<uint32_t>(n.cuts_component);
+    queue_.push(make(MsgType::TreeNode, bytes_of(t)));
+}
+
 void IpcServer::event(std::string_view name, std::initializer_list<KV> fields) {
     if (cfg_.forward) cfg_.forward->event(name, fields);
+    auto field = [&](std::string_view key) -> std::string_view {
+        for (const auto& [k, v] : fields)
+            if (k == key) return v;
+        return {};
+    };
+    auto num = [&](std::string_view key) {
+        double x = 0;
+        return parse_double(field(key), x) ? x : 0.0;
+    };
+    if (name == "cut_round") {
+        CutRoundPacket c{};
+        c.timestamp_us = now_us();
+        c.round = static_cast<uint32_t>(num("round"));
+        c.rows = static_cast<uint32_t>(num("rows"));
+        c.lp_value = num("lp");
+        c.sec = static_cast<uint32_t>(num("sec"));
+        c.blossom = static_cast<uint32_t>(num("blossom"));
+        c.component = static_cast<uint32_t>(num("comp"));
+        c.pool = static_cast<uint32_t>(num("pool"));
+        c.aged = static_cast<uint32_t>(num("aged"));
+        c.lp_iterations = static_cast<uint32_t>(num("iters"));
+        c.lp_s = static_cast<float>(num("lp_s"));
+        c.sep_s = static_cast<float>(num("sep_s"));
+        queue_.push(make(MsgType::CutRound, bytes_of(c)));
+        if (c.sec + c.blossom + c.component + c.pool == 0)
+            push_event(static_cast<uint8_t>(EventKind::NoViolatedCuts), c.lp_value, false, "");
+    } else if (name == "phase") {
+        push_event(static_cast<uint8_t>(EventKind::Phase), 0, false, field("name"));
+    } else if (name == "root_done" && field("tailing_off") == "true") {
+        push_event(static_cast<uint8_t>(EventKind::TailingOff), num("lp_value"), false, "");
+    } else if (name == "rcf_root") {
+        push_event(static_cast<uint8_t>(EventKind::Rcf), num("pruned_edges_rcf"), false, "");
+    }
     std::string line(name);
     for (const auto& [k, v] : fields) {
         line += ' ';
@@ -82,16 +177,37 @@ void IpcServer::event(std::string_view name, std::initializer_list<KV> fields) {
     queue_.push(make(MsgType::Log, text(line)));
 
     std::lock_guard<std::mutex> lk(state_mu_);
+    const double ub0 = pkt_.upper_bound, lb0 = pkt_.lower_bound;
     for (const auto& [k, v] : fields) {
         double x;
         if (k == "ub" && parse_double(v, x) && !(x >= pkt_.upper_bound)) pkt_.upper_bound = x;  // NaN-safe min
-        else if ((k == "lb" || k == "lb_int") && parse_double(v, x) && !(x <= pkt_.lower_bound)) pkt_.lower_bound = x;
+        // lb / lb_int: Lagrangian, tree or final bound; global_lb: Farley bound of the root loop,
+        // globally valid at every root pricing round (MASTER §5.5) but only valid for its subtree
+        // once the loop runs tree nodes, so accepted only before the first tree node. Max-only.
+        else if ((k == "lb" || k == "lb_int" || (k == "global_lb" && !tree_started_.load(std::memory_order_acquire))) &&
+                 parse_double(v, x) && !(x <= pkt_.lower_bound))
+            pkt_.lower_bound = x;
         else if (k == "open" && parse_double(v, x)) pkt_.open_nodes = static_cast<uint32_t>(x);
         else if (k == "edges" && parse_double(v, x)) pkt_.active_edges = static_cast<uint32_t>(x);
         else if (k == "pruned_edges_rcf" && parse_double(v, x)) pkt_.pruned_edges_rcf = static_cast<uint32_t>(x);
         else if (k == "pool_cuts" && parse_double(v, x)) pkt_.cut_pool_size = static_cast<uint32_t>(x);
         else if (k == "iters" && parse_double(v, x)) pkt_.simplex_iterations += static_cast<uint64_t>(x);
         else if (name == "phase" && k == "name") pkt_.phase = phase_id(v);
+    }
+    const bool lagr = name == "held_karp" || field("lb_source") == "lagrangian";
+    if (pkt_.upper_bound != ub0 && !std::isnan(pkt_.upper_bound)) {
+        const auto src = field("source");
+        push_event(static_cast<uint8_t>(EventKind::UbImproved), pkt_.upper_bound, field("heuristic") != "false",
+                   src.empty() ? name : src);
+    }
+    if (pkt_.lower_bound != lb0 && !std::isnan(pkt_.lower_bound)) {
+        if (lagr) pkt_.lb_source = 1;
+        push_event(static_cast<uint8_t>(EventKind::LbImproved), pkt_.lower_bound, false, lagr ? "lagrangian" : "lp");
+    }
+    if (!proven_sent_ && (field("status") == "OPTIMAL_PROVEN" ||
+                          (!std::isnan(pkt_.lower_bound) && std::ceil(pkt_.lower_bound - 1e-6) >= pkt_.upper_bound))) {
+        proven_sent_ = true;
+        push_event(static_cast<uint8_t>(EventKind::Proven), pkt_.upper_bound, false, "");
     }
     push_telemetry_locked(false);
 }
@@ -180,12 +296,14 @@ void IpcServer::run() {
             connected_.store(true, std::memory_order_release);
             serve(*t);
             connected_.store(false, std::memory_order_release);
+            version_.store(0, std::memory_order_release);
         }
     }
 }
 
 bool IpcServer::handshake(Transport& t, FrameDecoder& dec) {
-    const auto hello = encode(MsgType::Hello, pack(cfg_.hello));
+    // Hello carries the lowest version in its header, so any supported peer decodes it.
+    const auto hello = encode(MsgType::Hello, pack(cfg_.hello), false, kProtocolMin);
     if (!t.write_all(hello.data(), hello.size())) return false;
     uint8_t buf[4096];
     const auto end = Clock::now() + std::chrono::seconds(5);
@@ -201,10 +319,11 @@ bool IpcServer::handshake(Transport& t, FrameDecoder& dec) {
                 std::string why = "version mismatch: engine " + std::to_string(cfg_.hello.protocol_min) + ".." +
                                   std::to_string(cfg_.hello.version);
                 if (peer) why += ", gui " + std::to_string(peer->protocol_min) + ".." + std::to_string(peer->version);
-                const auto c = encode(MsgType::Close, text(why));
+                const auto c = encode(MsgType::Close, text(why), false, kProtocolMin);
                 t.write_all(c.data(), c.size());
                 return false;
             }
+            version_.store(v, std::memory_order_release);
             return true;
         }
     }
@@ -217,6 +336,9 @@ void IpcServer::serve(Transport& t) {
     for (;;) {
         // Outgoing first: everything queued, without waiting.
         while (auto f = queue_.pop(std::chrono::milliseconds(0))) {
+            const uint16_t v = version_.load(std::memory_order_acquire);
+            if (first_version(f->type) > v) continue;  // the peer does not know this type
+            f->version = v;
             const auto w = encode(*f);
             if (!t.write_all(w.data(), w.size())) return;
             if (f->type == MsgType::Finished) finished_sent_.store(true, std::memory_order_release);
@@ -235,7 +357,17 @@ void IpcServer::serve(Transport& t) {
 }
 
 void IpcServer::handle(Transport& t, const Frame& f) {
-    if (!is_control(f.type)) return;  // the GUI sends only control (and the handshake)
+    if (f.type == MsgType::Command && f.payload.size() >= 8) {
+        const auto seq = unpack_u64(std::span(f.payload).first(8));
+        const auto ack = enc(MsgType::Ack, pack_u64(*seq));
+        t.write_all(ack.data(), ack.size());
+        const std::string_view cmd(reinterpret_cast<const char*>(f.payload.data()) + 8, f.payload.size() - 8);
+        const std::string reply = cfg_.on_command ? cfg_.on_command(cmd) : "command_unsupported " + std::string(cmd);
+        const auto lg = enc(MsgType::Log, text(reply));
+        t.write_all(lg.data(), lg.size());
+        return;
+    }
+    if (!is_control(f.type)) return;  // otherwise the GUI sends only control (and the handshake)
     const auto seq = unpack_u64(f.payload);
     if (!seq) return;
     auto& c = engine_control();
@@ -247,7 +379,7 @@ void IpcServer::handle(Transport& t, const Frame& f) {
         case MsgType::Shutdown: shutdown_.store(1, std::memory_order_release); c.cancel(); break;
         default: break;
     }
-    const auto ack = encode(MsgType::Ack, pack_u64(*seq));
+    const auto ack = enc(MsgType::Ack, pack_u64(*seq));
     t.write_all(ack.data(), ack.size());
     if (f.type == MsgType::Pause) {
         // Measured in the engine: time until a solver thread sleeps in pause_point (<= 1 s wait).
@@ -257,11 +389,11 @@ void IpcServer::handle(Transport& t, const Frame& f) {
         const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
         char b[96];
         std::snprintf(b, sizeof b, "paused stalled_threads=%u after_ms=%.1f", c.waiting(), ms);
-        const auto lg = encode(MsgType::Log, text(b));
+        const auto lg = enc(MsgType::Log, text(b));
         t.write_all(lg.data(), lg.size());
     } else if (f.type == MsgType::Checkpoint) {
         const bool ok = cfg_.on_checkpoint && cfg_.on_checkpoint();
-        const auto lg = encode(MsgType::Log, text(ok ? "checkpoint_written" : "checkpoint_skipped no_checkpoint_dir"));
+        const auto lg = enc(MsgType::Log, text(ok ? "checkpoint_written" : "checkpoint_skipped no_checkpoint_dir"));
         t.write_all(lg.data(), lg.size());
     }
 }

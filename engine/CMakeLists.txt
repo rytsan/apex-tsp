@@ -102,7 +102,8 @@ add_executable(engine_tests
     tests/test_held_karp.cpp
     tests/test_mem.cpp
     tests/test_ipc_protocol.cpp
-    tests/test_ipc_server.cpp)
+    tests/test_ipc_server.cpp
+    tests/test_ipc_v3.cpp)
 target_include_directories(engine_tests SYSTEM PRIVATE ${doctest_SOURCE_DIR})
 target_compile_definitions(engine_tests PRIVATE APEX_DATA_DIR="${APEX_DATA_DIR}" APEX_BIN="$<TARGET_FILE:engine>")
 add_dependencies(engine_tests engine)
