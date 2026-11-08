@@ -8,3 +8,4 @@ gui/**/obj/
 engine/test.log
 engine/build.log
 third_party_test/
+__pycache__/
