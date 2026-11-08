@@ -211,6 +211,7 @@ public sealed partial class MainWindow : Window
                 },
             }),
             Card("Map layers", LayerPanel()),
+            ToursCard(),
             Card("Final report", _report),
         ]);
         Grid Fill(Control c) { var g = new Grid(); g.Children.Add(c); return g; }
@@ -288,7 +289,7 @@ public sealed partial class MainWindow : Window
             p.Children.Add(c);
         }
         var legend = new TextBlock { FontSize = 11, Opacity = 0.75, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0) };
-        legend.Text = "tour: orange = heuristic, blue = LP, green = proven · LP: blue x = 1, red 0 < x < 1 (width and opacity by x), yellow = new since the last LP";
+        legend.Text = "tour: orange = heuristic, blue = LP, green = proven · earlier tours: own colors (Tours found) · last improvement: red dashed = edges cut out, green = edges added · LP: blue x = 1, red 0 < x < 1 (width and opacity by x), yellow = new since the last LP";
         p.Children.Add(legend);
         return p;
     }
@@ -342,6 +343,9 @@ public sealed partial class MainWindow : Window
         _map.Renderer.LpIntegralColor = Palette.Sk(_pal.Lp);
         _map.Renderer.LpFractionalColor = Palette.Sk(_pal.Danger);
         _map.Renderer.LpNewColor = Palette.Sk(Color.Parse("#F9AB00"));
+        _map.Renderer.RemovedColor = Palette.Sk(_pal.Danger);
+        _map.Renderer.AddedColor = Palette.Sk(_pal.Proven);
+        RebuildTourRows();
         _solverDirty = true;
         RefreshSolverViews();
         RefilterLog();
@@ -373,6 +377,7 @@ public sealed partial class MainWindow : Window
             _map.Scene = scene;
             _map.Fit();
             _vm.Reset();
+            ResetTours();
             _settings.Touch(Path.GetFullPath(path));
             SaveSettings();
             Title = $"APEX-TSP — {info.Name}";
@@ -484,6 +489,7 @@ public sealed partial class MainWindow : Window
         SaveSettings();
         _run?.Dispose();
         _vm.Reset();
+        ResetTours();
         _logItems.Clear();
         _runSettings = s;
         var dir = _store.NewRunDir(_inst.Path, out _runId);
@@ -522,7 +528,11 @@ public sealed partial class MainWindow : Window
             c.TourUpdate += (_, _) => ReadTour(s);
             c.Finished += j => Dispatcher.UIThread.Post(() => OnFinished(s, j));
             c.Closed += r => Dispatcher.UIThread.Post(() => _vm.OnClosed(r));
-            c.SolverEvent += e => Dispatcher.UIThread.Post(() => _vm.OnSolverEvent(e));
+            c.SolverEvent += e => Dispatcher.UIThread.Post(() =>
+            {
+                _vm.OnSolverEvent(e);
+                if (e.Kind == EventKind.UbImproved) OnUbEvent(e);
+            });
             c.CutRound += r => Dispatcher.UIThread.Post(() => _vm.OnCutRound(r));
             c.TreeNode += n => Dispatcher.UIThread.Post(() => _vm.OnTreeNode(n));
             c.LpSolution += (_, e) =>
@@ -600,6 +610,7 @@ public sealed partial class MainWindow : Window
         Dispatcher.UIThread.Post(() =>
         {
             if (_run != s || _map.Scene is null) return;
+            OnTourRead(buf, count);
             _map.Scene.SetTour(buf, count);
             _map.Invalidate();
         });
@@ -667,6 +678,7 @@ public sealed partial class MainWindow : Window
             if (!File.Exists(r.Instance) || !OpenInstance(r.Instance)) { Toast("instance file missing: " + r.Instance); return false; }
         var report = Path.Combine(dir, "report.json");
         _vm.LoadRecord(r, File.Exists(report) ? File.ReadAllText(report) : "");
+        ResetTours();
         var tour = Path.Combine(dir, "tour.tour");
         if (File.Exists(tour) && _map.Scene is not null)
         {

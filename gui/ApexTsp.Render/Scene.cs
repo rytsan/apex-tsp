@@ -13,9 +13,57 @@ public sealed class Scene
     public float MaxX { get; }
     public float MaxY { get; }
 
+    // Original coordinates (double) and metric, for tour lengths: the engine's EUC_2D / CEIL_2D
+    // rules (exact sqrt on doubles, nint / ceil).
+    public double[]? XD { get; init; }
+    public double[]? YD { get; init; }
+    public bool Ceil2D { get; init; }
+
+    public long TourLength(ReadOnlySpan<uint> t)
+    {
+        long sum = 0;
+        for (var i = 0; i < t.Length; ++i)
+        {
+            uint a = t[i], b = t[(i + 1) % t.Length];
+            double dx = XD is null ? X[a] - X[b] : XD[a] - XD[b], dy = YD is null ? Y[a] - Y[b] : YD[a] - YD[b];
+            var d = Math.Sqrt(dx * dx + dy * dy);
+            sum += Ceil2D ? (long)Math.Ceiling(d) : (long)Math.Floor(d + 0.5);
+        }
+        return sum;
+    }
+
     public uint[] Tour { get; private set; } = [];
     public int TourCount { get; private set; }
     public IReadOnlyList<ClusterBox> Clusters => _clusters;
+
+    // Tour history overlays (M6.3b): earlier tours drawn in their own colors; Removed / Added are
+    // the edges the last improvement cut out of / brought into the tour.
+    public List<TourLayer> Layers { get; } = [];
+    public (uint A, uint B)[] Removed { get; private set; } = [];
+    public (uint A, uint B)[] Added { get; private set; } = [];
+
+    public void SetDiff(uint[] previous, int prevCount, uint[] current, int count)
+    {
+        var a = EdgeSet(previous, prevCount);
+        var b = EdgeSet(current, count);
+        Removed = [.. a.Where(e => !b.Contains(e)).Select(Split)];
+        Added = [.. b.Where(e => !a.Contains(e)).Select(Split)];
+    }
+
+    public void ClearDiff()
+    {
+        Removed = [];
+        Added = [];
+    }
+
+    private static HashSet<ulong> EdgeSet(uint[] t, int m)
+    {
+        var h = new HashSet<ulong>(m);
+        for (var i = 0; i < m; ++i) h.Add(Key(t[i], t[(i + 1) % m]));
+        return h;
+    }
+
+    private static (uint, uint) Split(ulong k) => ((uint)(k >> 32), (uint)k);
 
     // Current LP support (exact mode, M6.3): edges with x > 0; New marks edges absent from the
     // previous LP (flashed briefly so the change between rounds is visible).
@@ -75,8 +123,9 @@ public sealed class Scene
     // NODE_COORD_SECTION of a TSPLIB file (any 2D metric).
     public static Scene LoadTsplib(string path)
     {
-        var xs = new List<float>();
-        var ys = new List<float>();
+        var xs = new List<double>();
+        var ys = new List<double>();
+        var ceil = false;
         var inCoords = false;
         foreach (var raw in File.ReadLines(path))
         {
@@ -84,21 +133,24 @@ public sealed class Scene
             if (line.Length == 0) continue;
             if (!inCoords)
             {
+                if (line.StartsWith("EDGE_WEIGHT_TYPE", StringComparison.Ordinal)) ceil = line.Contains("CEIL_2D", StringComparison.Ordinal);
                 if (line.StartsWith("NODE_COORD_SECTION", StringComparison.Ordinal)) inCoords = true;
                 continue;
             }
             if (line == "EOF") break;
             var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length < 3) break;
-            xs.Add(float.Parse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture));
-            ys.Add(float.Parse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture));
+            xs.Add(double.Parse(parts[1], NumberStyles.Float, CultureInfo.InvariantCulture));
+            ys.Add(double.Parse(parts[2], NumberStyles.Float, CultureInfo.InvariantCulture));
         }
         if (xs.Count == 0) throw new InvalidDataException(path + ": no NODE_COORD_SECTION");
-        return new Scene(xs.ToArray(), ys.ToArray());
+        return new Scene([.. xs.Select(v => (float)v)], [.. ys.Select(v => (float)v)]) { XD = [.. xs], YD = [.. ys], Ceil2D = ceil };
     }
 }
 
 public readonly record struct LpSegment(uint U, uint V, float X);
+
+public sealed record TourLayer(uint[] Tour, int Count, SkiaSharp.SKColor Color);
 
 public sealed class ClusterBox
 {

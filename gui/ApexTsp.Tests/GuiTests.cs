@@ -361,6 +361,26 @@ public class ViewModelTests
 public class AppModelTests
 {
     [Fact]
+    public void T_tour_diff_cut_and_added_edges()
+    {
+        var s = new Scene(new float[8], new float[8]);
+        uint[] a = [0, 1, 2, 3, 4, 5, 6, 7];
+        uint[] b = [0, 1, 5, 4, 3, 2, 6, 7];  // 2-opt: cut (1,2) and (5,6), add (1,5) and (2,6)
+        s.SetDiff(a, 8, b, 8);
+        Assert.Equal(2, s.Removed.Length);
+        Assert.Equal(2, s.Added.Length);
+        Assert.Contains((1u, 2u), s.Removed);
+        Assert.Contains((5u, 6u), s.Removed);
+        Assert.Contains((1u, 5u), s.Added);
+        Assert.Contains((2u, 6u), s.Added);
+        s.SetDiff(b, 8, [7, 6, 2, 3, 4, 5, 1, 0], 8);  // same cycle reversed and rotated: nothing changes
+        Assert.Empty(s.Removed);
+        Assert.Empty(s.Added);
+        s.ClearDiff();
+        Assert.Empty(s.Removed);
+    }
+
+    [Fact]
     public void T_settings_to_engine_args()
     {
         var s = new RunSettings { Mode = "scalable", TimeLimitS = 90.5, Threads = 3, Seed = 42, MemLimitMb = 2048, CheckpointDir = "/tmp/ck", Resume = true };
@@ -459,5 +479,19 @@ public class AppModelTests
             Assert.Equal(280, text.Split("points=\"")[1].Split('"')[0].Split(' ', StringSplitOptions.RemoveEmptyEntries).Length);
         }
         finally { dir.Delete(true); }
+    }
+}
+
+public class MetricTests
+{
+    // Same lengths as the engine: a280 / pr1002 optimal tours (EUC_2D) from the TSPLIB files.
+    [Theory]
+    [InlineData("a280", 2579)]
+    [InlineData("pr1002", 259045)]
+    [InlineData("berlin52", 7542)]
+    public void T_tour_length_matches_known_optimum(string name, long opt)
+    {
+        var s = Scene.LoadTsplib(Path.Combine(Repo.Root, "data", name + ".tsp"));
+        Assert.Equal(opt, s.TourLength(TourFiles.Read(Path.Combine(Repo.Root, "data", name + ".opt.tour"))));
     }
 }

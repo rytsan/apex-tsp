@@ -28,6 +28,10 @@ public sealed class TourRenderer
     public bool ShowTour { get; set; } = true;
     public bool ShowNodes { get; set; } = true;
     public bool ShowLp { get; set; } = true;
+    public bool ShowDiff { get; set; } = true;
+    public SKColor RemovedColor { get; set; } = new(0xD9, 0x30, 0x25);
+    public SKColor AddedColor { get; set; } = new(0x1E, 0x8E, 0x3E);
+    private readonly SKPaint _layerPaint = new() { Style = SKPaintStyle.Stroke, StrokeWidth = 0, IsAntialias = false };
     public SKColor LpIntegralColor { get; set; } = new(0x1A, 0x73, 0xE8);
     public SKColor LpFractionalColor { get; set; } = new(0xD9, 0x30, 0x25);
     public SKColor LpNewColor { get; set; } = new(0xF9, 0xAB, 0x00);
@@ -73,7 +77,9 @@ public sealed class TourRenderer
         switch (level)
         {
             case LodLevel.Raw:
-                if (ShowTour) segments = DrawTour(canvas, s, 1, W, H);
+                foreach (var layer in s.Layers) { _layerPaint.Color = layer.Color; segments += DrawTour(canvas, layer.Tour, layer.Count, s.Count, 1, W, H, _layerPaint); }
+                if (ShowTour) segments += DrawTour(canvas, s, 1, W, H);
+                if (ShowDiff) segments += DrawDiff(canvas, s, W, H, detail: true);
                 if (ShowLp) segments += DrawLp(canvas, s, W, H, fractionalOnly: false);
                 if (ShowNodes)
                 {
@@ -85,7 +91,9 @@ public sealed class TourRenderer
             case LodLevel.Decimated:
             {
                 var k = (int)Math.Ceiling((double)visible / RawLimit);
-                if (ShowTour) segments = DrawTour(canvas, s, k, W, H);
+                foreach (var layer in s.Layers) { _layerPaint.Color = layer.Color; segments += DrawTour(canvas, layer.Tour, layer.Count, s.Count, k, W, H, _layerPaint); }
+                if (ShowTour) segments += DrawTour(canvas, s, k, W, H);
+                if (ShowDiff) segments += DrawDiff(canvas, s, W, H, detail: false);
                 if (ShowLp) segments += DrawLp(canvas, s, W, H, fractionalOnly: true);
                 if (!ShowNodes) break;
                 var occ = Cells(W * H);
@@ -158,10 +166,44 @@ public sealed class TourRenderer
         return _cells;
     }
 
-    // Tour as one path through every k-th vertex; segments entirely off screen are skipped.
-    private int DrawTour(SKCanvas canvas, Scene s, int k, int W, int H)
+    // Edges cut out of the tour by the last improvement (red, dashed) and brought in (green).
+    private readonly SKPaint _diffPaint = new() { Style = SKPaintStyle.Stroke, IsAntialias = true, StrokeCap = SKStrokeCap.Round };
+
+    private int DrawDiff(SKCanvas canvas, Scene s, int W, int H, bool detail)
     {
-        var m = Math.Min(s.TourCount, s.Tour.Length);
+        var drawn = 0;
+        void Set((uint A, uint B)[] edges, SKColor c, bool dashed)
+        {
+            if (edges.Length == 0) return;
+            var pts = new List<SKPoint>(edges.Length * 2);
+            foreach (var (a, b) in edges)
+            {
+                if (a >= s.Count || b >= s.Count || !SegmentVisible(a, b, W, H)) continue;
+                pts.Add(new SKPoint(_sx[a], _sy[a]));
+                pts.Add(new SKPoint(_sx[b], _sy[b]));
+            }
+            var wide = detail && pts.Count / 2 <= LpDetailLimit;
+            _diffPaint.StrokeWidth = wide ? 2.4f : 0;
+            _diffPaint.IsAntialias = wide;
+            _diffPaint.Color = c;
+            using var dash = dashed && wide ? SKPathEffect.CreateDash([6, 4], 0) : null;
+            _diffPaint.PathEffect = dash;
+            canvas.DrawPoints(SKPointMode.Lines, [.. pts], _diffPaint);
+            _diffPaint.PathEffect = null;
+            drawn += pts.Count / 2;
+        }
+        Set(s.Removed, RemovedColor, dashed: true);
+        Set(s.Added, AddedColor, dashed: false);
+        return drawn;
+    }
+
+    // Tour as one path through every k-th vertex; segments entirely off screen are skipped.
+    private int DrawTour(SKCanvas canvas, Scene s, int k, int W, int H) =>
+        DrawTour(canvas, s.Tour, s.TourCount, s.Count, k, W, H, _tourPaint);
+
+    private int DrawTour(SKCanvas canvas, uint[] tour, int count, int nodes, int k, int W, int H, SKPaint paint)
+    {
+        var m = Math.Min(count, tour.Length);
         if (m < 2) return 0;
         using var path = new SKPath();
         var segments = 0;
@@ -169,8 +211,8 @@ public sealed class TourRenderer
         var pen = false;
         for (var j = 0; j <= m; j += k)
         {
-            var node = s.Tour[j == m ? 0 : j];
-            if (node >= s.Count) { pen = false; continue; }
+            var node = tour[j == m ? 0 : j];
+            if (node >= nodes) { pen = false; continue; }
             if (prev != uint.MaxValue && SegmentVisible(prev, node, W, H))
             {
                 if (!pen) path.MoveTo(_sx[prev], _sy[prev]);
@@ -182,7 +224,7 @@ public sealed class TourRenderer
             prev = node;
             if (j < m && j + k > m) j = m - k;  // close the cycle through the first vertex
         }
-        canvas.DrawPath(path, _tourPaint);
+        canvas.DrawPath(path, paint);
         return segments;
     }
 

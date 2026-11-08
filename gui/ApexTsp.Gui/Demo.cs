@@ -64,6 +64,12 @@ public sealed partial class MainWindow
         _map.Fit();
         _map.SavePng(Path.Combine(dir, "map_final.png"));
         SaveWindowPng(Path.Combine(dir, "window_final.png"));
+        SetAllTours(true);
+        _map.Renderer.ShowLp = false;
+        _map.SavePng(Path.Combine(dir, "map_tours.png"));
+        SaveWindowPng(Path.Combine(dir, "window_tours.png"));
+        File.WriteAllText(Path.Combine(dir, "tours.txt"), string.Join("\n", _tours.Select(t =>
+            FormattableString.Invariant($"#{t.Index} source={t.Source} heuristic={t.Heuristic} ub={MainViewModel.Fmt(t.Ub)} t={t.Seconds:0.0}s cut={t.Removed} added={t.Added} color={t.Color}"))) + "\n");
         File.WriteAllText(Path.Combine(dir, "report.json"), _vm.ReportJson);
         if (_run is not null && File.Exists(_run.LogPath)) File.Copy(_run.LogPath, Path.Combine(dir, "engine.log"), true);
         var r = _map.Renderer;
