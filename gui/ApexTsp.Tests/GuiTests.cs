@@ -597,5 +597,7 @@ public class ReferenceTests
         Assert.Contains("not proven optimal", rows["mona-lisa100K"].Summary());
         Assert.DoesNotContain("optimum", rows["mona-lisa100K"].Summary().Split('\n')[0]);
         Assert.Equal(["a", "b,c", "d\"e", ""], ReferenceTable.SplitCsv("a,\"b,c\",\"d\"\"e\","));
+        Assert.Equal(["0.07 s", "439 s", "1.2 h", "49.5 d", "136.0 y"],
+            new[] { 0.07, 438.9, 4320, 4276800.0, 4291833600 }.Select(CampaignPlan.Dur));
     }
 }

@@ -364,6 +364,7 @@ public sealed partial class MainWindow : Window
         _editor.InvalidateVisual();
 
         RebuildTourRows();
+        RefreshCampaignTable();
         _solverDirty = true;
         RefreshSolverViews();
         RefilterLog();

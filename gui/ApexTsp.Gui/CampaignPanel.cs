@@ -30,6 +30,14 @@ public static class CampaignPlan
     public static double TimeBox(int n, bool exact) =>
         exact ? (n < 200 ? 60 : n < 1000 ? 600 : n < 3000 ? 1800 : 3600) : (n < 1000 ? 30 : n < 5000 ? 120 : 600);
 
+    // Seconds as a short duration: "0.07 s", "439 s", "1.2 h", "49.5 d", "136.0 y".
+    public static string Dur(double s)
+    {
+        if (double.IsNaN(s)) return "-";
+        var (v, f, u) = s < 100 ? (s, "0.00", "s") : s < 3600 ? (s, "0", "s") : s < 86400 ? (s / 3600, "0.0", "h") : s < 365.25 * 86400 ? (s / 86400, "0.0", "d") : (s / (365.25 * 86400), "0.0", "y");
+        return v.ToString(f, CultureInfo.InvariantCulture) + " " + u;
+    }
+
     public static List<CampaignRun> Build(IEnumerable<(string Name, int N)> instances, IReadOnlyCollection<string> solvers) =>
         [.. from i in instances.OrderBy(i => i.N)
             from s in Solvers
@@ -45,13 +53,18 @@ public static class CampaignPlan
 public sealed partial class MainWindow
 {
     private readonly TextBox _campDir = new() { MinWidth = 300 };
-    private readonly NumericUpDown _campMaxN = new() { Minimum = 50, Maximum = 200000, Value = 1002, Increment = 500, FormatString = "0", Width = 130 };
+    private readonly NumericUpDown _campMinN = new() { Minimum = 0, Maximum = 200000, Value = 0, Increment = 100, FormatString = "0", Width = 130 };
+    private readonly NumericUpDown _campMaxN = new() { Minimum = 0, Maximum = 200000, Value = 1002, Increment = 500, FormatString = "0", Width = 130 };
+    private readonly Button _campReset = new() { Content = "Reset results" };
+    private DateTime _resetArmed;
     private readonly Dictionary<string, CheckBox> _campSolver = [];
     private readonly Button _campStart = new() { Content = "▶ Start campaign" }, _campStop = new() { Content = "Stop" };
     private readonly TextBlock _campStatus = new() { TextWrapping = TextWrapping.Wrap };
     private readonly TextBlock _campLive = new() { FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap };
     private readonly ProgressBar _campProgress = new() { Minimum = 0, Maximum = 1, Height = 6 };
-    private readonly ListBox _campTable = new() { FontFamily = new FontFamily("monospace"), FontSize = 11 };
+    private readonly Grid _campHead = new();
+    private readonly StackPanel _campRows = new();
+    private readonly WrapPanel _campKpis = new();
     private readonly ListBox _campLog = new() { FontFamily = new FontFamily("monospace"), FontSize = 10 };
     private readonly System.Collections.ObjectModel.ObservableCollection<string> _campLogItems = [];
     private readonly MapView _benchMap = new();
@@ -99,46 +112,66 @@ public sealed partial class MainWindow
         _campStop.Click += (_, _) => StopCampaign();
         _campLog.ItemsSource = _campLogItems;
         _campMaxN.ValueChanged += (_, _) => RefreshCampaignTable();
+        _campMinN.ValueChanged += (_, _) => RefreshCampaignTable();
+        _campReset.Click += (_, _) => ResetResults();
+        ToolTip.SetTip(_campReset, "delete the results (json, log, tour) of the instances in the n range for the checked solvers, so Start runs them again; published history columns are kept");
         _benchMap.Scene = null;
 
         var dirRow = new DockPanel();
         DockPanel.SetDock(browse, Dock.Right);
         dirRow.Children.AddRange([browse, _campDir]);
-        var controls = new StackPanel
-        {
-            Spacing = 8,
+        solverRow.Children.Insert(0, new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 0, 24, 0),
             Children =
             {
-                dirRow,
-                new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Children = { new TextBlock { Text = "instances up to n =", VerticalAlignment = VerticalAlignment.Center }, _campMaxN } },
-                solverRow,
-                new WrapPanel { Children = { _campStart, new Border { Width = 6 }, _campStop, new Border { Width = 12 }, download, new Border { Width = 6 }, report, new Border { Width = 6 }, solve } },
-                _campProgress, _campStatus,
-            },
-        };
+                new TextBlock { Text = "n from", VerticalAlignment = VerticalAlignment.Center }, _campMinN,
+                new TextBlock { Text = "to", VerticalAlignment = VerticalAlignment.Center }, _campMaxN,
+            } });
+        foreach (var c in solverRow.Children) c.VerticalAlignment = VerticalAlignment.Center;
+        var actions = new WrapPanel { Children = { _campStart, new Border { Width = 6 }, _campStop, new Border { Width = 18 }, download, new Border { Width = 6 }, report, new Border { Width = 6 }, solve, new Border { Width = 18 }, _campReset } };
+        var controls = new StackPanel { Spacing = 8, Children = { dirRow, solverRow, actions, _campProgress, _campStatus } };
+
         var live = new DockPanel();
-        var liveTop = new StackPanel { Spacing = 4, Children = { _campLive } };
-        DockPanel.SetDock(liveTop, Dock.Top);
-        var liveGrid = new Grid { RowDefinitions = new RowDefinitions("*,160,140"), RowSpacing = 8 };
+        DockPanel.SetDock(_campLive, Dock.Top);
+        _campLive.Margin = new Thickness(0, 0, 0, 8);
+        _campLive.Text = "idle: start a campaign and the current run shows here (map, bounds, log)";
+        var liveGrid = new Grid { RowDefinitions = new RowDefinitions("*,150,150"), RowSpacing = 8 };
         liveGrid.Children.Add(new Border { Child = _benchMap, ClipToBounds = true, CornerRadius = new CornerRadius(6) });
         Grid.SetRow(_benchChart, 1);
         liveGrid.Children.Add(_benchChart);
         Grid.SetRow(_campLog, 2);
         liveGrid.Children.Add(_campLog);
-        live.Children.AddRange([liveTop, liveGrid]);
+        live.Children.AddRange([_campLive, liveGrid]);
+
+        // Comparison: geometric-mean tiles, then the table (fixed header, rows scroll), notes folded at the bottom.
+        var rowsScroll = new ScrollViewer { Content = _campRows, HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled };
+        var tableDock = new DockPanel();
+        DockPanel.SetDock(_campHead, Dock.Top);
+        tableDock.Children.AddRange([_campHead, rowsScroll]);
+        var tableScroll = new ScrollViewer
+        {
+            Content = tableDock,
+            HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+            VerticalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Disabled,
+        };
+        var kpiBox = new StackPanel
+        {
+            Spacing = 4, Margin = new Thickness(0, 0, 0, 10),
+            Children = { new TextBlock { Text = "Geometric mean of APEX exact time ÷ the other time, proven optima only (below 1x = APEX faster)", FontSize = 11, Opacity = 0.7 }, _campKpis },
+        };
+        var notes = new Expander { Header = "Notes and sources", Content = _campSummary, Margin = new Thickness(0, 8, 0, 0), HorizontalAlignment = HorizontalAlignment.Stretch };
+        var tableBody = new DockPanel();
+        DockPanel.SetDock(kpiBox, Dock.Top);
+        DockPanel.SetDock(notes, Dock.Bottom);
+        tableBody.Children.AddRange([kpiBox, notes, tableScroll]);
 
         var left = new Grid { RowDefinitions = new RowDefinitions("Auto,*"), RowSpacing = 10, Margin = new Thickness(12, 0, 6, 12) };
         left.Children.Add(Card("Campaign (historical benchmark)", controls));
-        var tableBody = new DockPanel();
-        DockPanel.SetDock(_campSummary, Dock.Bottom);
-        _campSummary.Margin = new Thickness(0, 8, 0, 0);
-        tableBody.Children.AddRange([_campSummary, _campTable]);
-        var table = Card("Comparison (live): time vs published Concorde and vs Concorde here", tableBody, fill: true);
+        var table = Card("Comparison (live)", tableBody, fill: true);
         Grid.SetRow(table, 1);
         left.Children.Add(table);
         var right = Card("Running now", live, fill: true);
         right.Margin = new Thickness(6, 0, 12, 12);
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("3*,2*") };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,380") };
         grid.Children.Add(left);
         Grid.SetColumn(right, 1);
         grid.Children.Add(right);
@@ -151,15 +184,47 @@ public sealed partial class MainWindow
 
     private List<(string Name, int N)> CampaignInstances()
     {
-        var max = (int)(_campMaxN.Value ?? 1002);
+        int min = (int)(_campMinN.Value ?? 0), max = (int)(_campMaxN.Value ?? 1002);
         var path = ReferenceTable.Locate();
         if (path is null) return [];
         var lines = File.ReadAllLines(path);
         var head = ReferenceTable.SplitCsv(lines[0]);
         int c(string n) => Array.IndexOf(head, n);
         return [.. lines.Skip(1).Select(ReferenceTable.SplitCsv)
-            .Where(f => f[c("in_set")] == "yes" && int.Parse(f[c("n")], CultureInfo.InvariantCulture) <= max)
-            .Select(f => (f[c("instance")], int.Parse(f[c("n")], CultureInfo.InvariantCulture)))];
+            .Where(f => f[c("in_set")] == "yes")
+            .Select(f => (Name: f[c("instance")], N: int.Parse(f[c("n")], CultureInfo.InvariantCulture)))
+            .Where(i => i.N >= min && i.N <= max)];
+    }
+
+    // Two clicks within 5 s: the first arms (shows the count), the second deletes.
+    private void ResetResults()
+    {
+        if (_campaignActive) { Toast("stop the campaign first"); return; }
+        var solvers = _campSolver.Where(kv => kv.Value.IsChecked == true).Select(kv => kv.Key).ToList();
+        var runs = CampaignPlan.Build(CampaignInstances(), solvers).Where(r => File.Exists(RunBase(r) + ".json") || Directory.Exists(RunBase(r))).ToList();
+        if (runs.Count == 0) { Toast("no results to reset in this n range for the checked solvers"); return; }
+        if (DateTime.UtcNow - _resetArmed > TimeSpan.FromSeconds(5))
+        {
+            _resetArmed = DateTime.UtcNow;
+            _campReset.Content = $"Confirm: delete {runs.Count} results";
+            DispatcherTimer.RunOnce(() => { if (DateTime.UtcNow - _resetArmed >= TimeSpan.FromSeconds(5)) _campReset.Content = "Reset results"; }, TimeSpan.FromSeconds(5.1));
+            return;
+        }
+        _resetArmed = default;
+        _campReset.Content = "Reset results";
+        var failed = 0;
+        foreach (var r in runs)
+        {
+            var b = RunBase(r);
+            try
+            {
+                foreach (var ext in new[] { ".json", ".json.tmp", ".log", ".tour" }) File.Delete(b + ext);
+                if (Directory.Exists(b)) Directory.Delete(b, true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { ++failed; }
+        }
+        RefreshCampaignTable();
+        Toast($"reset: {runs.Count - failed} results deleted in {CampaignDir}" + (failed > 0 ? $", {failed} failed" : ""));
     }
 
     private string InstancePath(string name) => Path.Combine(RepoRoot() ?? _store.Home, "data", "tsplib", name + ".tsp");
@@ -421,15 +486,65 @@ public sealed partial class MainWindow
     private static double? Published(string raw) =>
         double.TryParse(raw.Split(' ')[0], NumberStyles.Float, CultureInfo.InvariantCulture, out var v) ? v : null;
 
+    // Table columns: header, width, header tooltip. Groups span columns: (title, first column, count).
+    private static readonly (string Head, double W, string Tip)[] CampCols =
+    [
+        ("instance", 92, ""), ("n", 48, "number of cities"),
+        ("year", 44, "year the optimum was first proven (Waterloo milestones, National / VLSI logs)"),
+        ("time", 72, "solution time of the first optimality proof, as published (hardware in the cell tooltip)"),
+        ("1998", 68, "Applegate, Bixby, Chvátal, Cook, Documenta Math. ICM 1998 (400 MHz AlphaServer)"),
+        ("1999", 68, "Concorde 1999 benchmark (500 MHz Alpha)"),
+        ("2003", 68, "Concorde 2003 benchmark (2.8 GHz Xeon)"),
+        ("Concorde", 72, "Concorde + QSopt on this machine (test-environment baseline)"),
+        ("APEX", 72, "APEX exact on this machine (5 threads, seed 1)"),
+        ("here", 52, "APEX exact time ÷ Concorde on this machine"),
+        ("2003", 50, "APEX exact time ÷ Concorde 2003 published"),
+        ("1999", 50, "APEX exact time ÷ Concorde 1999 published"),
+        ("1998", 50, "APEX exact time ÷ Concorde 1998 paper"),
+        ("first", 50, "APEX exact time ÷ first published optimality proof"),
+        ("scalable", 70, "APEX scalable tour vs the reference value"),
+        ("LKH-3", 70, "LKH-3 tour vs the reference value (test-environment baseline)"),
+    ];
+    private static readonly (string Title, int From, int Count)[] CampGroups =
+        [("", 0, 2), ("first proof", 2, 2), ("Concorde, published", 4, 3), ("this machine (exact)", 7, 2), ("APEX exact time ÷ Concorde", 9, 5), ("tour vs reference", 14, 2)];
+
+    private static Grid CampGrid()
+    {
+        var g = new Grid();
+        foreach (var c in CampCols) g.ColumnDefinitions.Add(new ColumnDefinition(c.W, GridUnitType.Pixel));
+        return g;
+    }
+
+    private static TextBlock CampCell(Grid g, int col, string text, IBrush fg, string tip = "", bool bold = false, int span = 1)
+    {
+        var t = new TextBlock
+        {
+            Text = text, Foreground = fg, FontSize = 12, Margin = new Thickness(6, 3), TextTrimming = TextTrimming.CharacterEllipsis,
+            HorizontalAlignment = col == 0 || span > 1 ? HorizontalAlignment.Left : HorizontalAlignment.Right,
+            FontWeight = bold ? FontWeight.SemiBold : FontWeight.Normal,
+        };
+        if (tip.Length > 0) ToolTip.SetTip(t, tip);
+        Grid.SetColumn(t, col);
+        Grid.SetColumnSpan(t, span);
+        g.Children.Add(t);
+        return t;
+    }
+
     private void RefreshCampaignTable()
     {
         var dir = CampaignDir;
         var refs = ReferenceTable.Load();
-        var lines = new List<string>
-        {
-            "                         first solved          |   published Concorde time, s         |     this machine, s     |  APEX exact time ÷                        | gap vs reference",
-            "instance          n      year  CPU time       |  1998 Alpha  1999 Alpha  2003 Xeon   | Concorde   APEX exact   | Conc.here  2003   1999   1998   first    | APEX scal.  LKH-3",
-        };
+        IBrush text = _pal.Brush(_pal.Text), muted = _pal.Brush(_pal.Muted), good = _pal.Brush(_pal.Proven), bad = _pal.Brush(_pal.Danger);
+        _campHead.Children.Clear();
+        _campHead.RowDefinitions = new RowDefinitions("Auto,Auto");
+        var groups = CampGrid();
+        foreach (var (title, from, count) in CampGroups) CampCell(groups, from, title, muted, span: count).FontSize = 11;
+        var heads = CampGrid();
+        for (var k = 0; k < CampCols.Length; ++k) CampCell(heads, k, CampCols[k].Head, text, CampCols[k].Tip, bold: true);
+        Grid.SetRow(heads, 1);
+        _campHead.Children.AddRange([groups, new Border { Child = heads, BorderBrush = _pal.Brush(_pal.Border), BorderThickness = new Thickness(0, 0, 0, 1) }]);
+        Grid.SetRow(_campHead.Children[1], 1);
+        _campRows.Children.Clear();
         JsonElement? Read(string inst, string solver)
         {
             var p = Path.Combine(dir, $"{inst}__{solver}.json");
@@ -440,10 +555,18 @@ public sealed partial class MainWindow
         static double Num(JsonElement? e, string k) => e is { } v && v.TryGetProperty(k, out var x) && x.ValueKind == JsonValueKind.Number ? x.GetDouble() : double.NaN;
         static string Str(JsonElement? e, string k) => e is { } v && v.TryGetProperty(k, out var x) && x.ValueKind == JsonValueKind.String ? x.GetString() ?? "" : "";
         static bool Proven(JsonElement? e) => Str(e, "status") == "OPTIMAL_PROVEN";
-        static string T(double? s) => s is not { } v || double.IsNaN(v) ? "-" : v < 100 ? v.ToString("0.00", CultureInfo.InvariantCulture) : v.ToString("0", CultureInfo.InvariantCulture);
-        static string Time(JsonElement? e) => e is null ? "-" : Proven(e) ? T(Num(e, "wall_s")) : Str(e, "status") == "TIME_LIMIT" ? "limit" : Str(e, "status").ToLowerInvariant();
-        static string R(double? a, double? b) => a is { } x && b is { } y && y > 0 && !double.IsNaN(x) ? (x / y).ToString(x / y >= 10 ? "0" : "0.0#", CultureInfo.InvariantCulture) + "x" : "-";
-        string VsRef(JsonElement? e, long refv) => e is null ? "-" : double.IsNaN(Num(e, "ub")) ? Str(e, "status").ToLowerInvariant() : (100 * (Num(e, "ub") - refv) / refv).ToString("+0.000;-0.000", CultureInfo.InvariantCulture) + "%";
+        static string T(double? s) => s is { } v ? CampaignPlan.Dur(v) : "-";
+        (string, IBrush) Time(JsonElement? e) => e is null ? ("-", muted) : Proven(e) ? (T(Num(e, "wall_s")), text) : Str(e, "status") == "TIME_LIMIT" ? ("limit", bad) : (Str(e, "status").ToLowerInvariant(), bad);
+        (string, IBrush) R(double? a, double? b) => a is { } x && b is { } y && y > 0 && !double.IsNaN(x)
+            ? ((x / y).ToString(x / y >= 10 ? "0" : "0.0#", CultureInfo.InvariantCulture) + "x", x / y <= 1 ? good : bad) : ("-", muted);
+        (string, IBrush) VsRef(JsonElement? e, long refv)
+        {
+            if (e is null) return ("-", muted);
+            var ub = Num(e, "ub");
+            if (double.IsNaN(ub) || refv <= 0) return (Str(e, "status").ToLowerInvariant(), muted);
+            var g = 100 * (ub - refv) / refv;
+            return (g.ToString("+0.000;-0.000;0.000", CultureInfo.InvariantCulture) + "%", Math.Abs(g) < 5e-4 ? good : text);
+        }
         var inst = CampaignInstances();
         var total = 0;
         var rHere = new List<double>();
@@ -466,22 +589,58 @@ public sealed partial class MainWindow
             if (apex is { } a3 && p03 is { } q3 && q3 > 0) r03.Add(Math.Max(a3, 1e-3) / q3);
             if (apex is { } a9 && p99 is { } q9 && q9 > 0) r99.Add(Math.Max(a9, 1e-3) / q9);
             if (conc is { } cc && p03 is { } q && q > 0) c03.Add(Math.Max(cc, 1e-3) / q);
-            var running = _campaignActive && _current is { } cur && cur.Instance == name ? " ◀" : "";
-            lines.Add(string.Create(CultureInfo.InvariantCulture,
-                $"{name,-14}{n,6}  {(rr?.Year is { Length: > 0 } y ? y : "-"),6}  {(rr?.FirstSolveStated is { Length: > 0 } fs ? fs.Replace(" seconds", " s").Replace(" years", " y") : "-"),-13} |  {(rr?.Abcc98Stated is { Length: > 0 } a98 ? a98.Replace(" seconds", "") : "-"),10}  {T(p99),10}  {T(p03),9}   | {Time(co),8}  {Time(ex),10}   | {R(apex, conc),8} {R(apex, p03),6} {R(apex, p99),6} {R(apex, p98),6} {R(apex, pFirst),8}  | {VsRef(sc, refv),9}  {VsRef(lk, refv),9}{running}"));
+            var row = CampGrid();
+            CampCell(row, 0, name, text, rr?.Note ?? "", bold: true);
+            CampCell(row, 1, n.ToString(CultureInfo.InvariantCulture), muted);
+            CampCell(row, 2, rr?.Year is { Length: > 0 } y ? y : "-", rr?.Year is { Length: > 0 } ? text : muted, rr?.SolvedBy ?? "");
+            CampCell(row, 3, T(pFirst), pFirst is null ? muted : text, rr?.FirstSolveStated is { Length: > 0 } fs ? $"{fs} ({rr.FirstSolveHw})" : "");
+            CampCell(row, 4, T(p98), p98 is null ? muted : text, rr?.Abcc98Stated ?? "");
+            CampCell(row, 5, rr?.Concorde99 is { Length: > 0 } c99 && p99 is null ? c99 : T(p99), p99 is null ? muted : text, rr?.Concorde99 ?? "");
+            CampCell(row, 6, T(p03), p03 is null ? muted : text);
+            var cells = new[] { Time(co), Time(ex), R(apex, conc), R(apex, p03), R(apex, p99), R(apex, p98), R(apex, pFirst), VsRef(sc, refv), VsRef(lk, refv) };
+            for (var k = 0; k < cells.Length; ++k) CampCell(row, 7 + k, cells[k].Item1, cells[k].Item2);
+            var running = _campaignActive && _current is { } cur && cur.Instance == name;
+            var bg = running ? Color.FromArgb(0x40, _pal.Accent.R, _pal.Accent.G, _pal.Accent.B) : _campRows.Children.Count % 2 == 1 ? _pal.Background : Colors.Transparent;
+            _campRows.Children.Add(new Border { Child = row, Background = new SolidColorBrush(bg), CornerRadius = new CornerRadius(4) });
         }
-        _campTable.ItemsSource = lines;
-        static string G(List<double> v) => v.Count == 0 ? "-" : Math.Exp(v.Average(Math.Log)).ToString("0.##", CultureInfo.InvariantCulture) + "x";
+        static double? G(List<double> v) => v.Count == 0 ? null : Math.Exp(v.Average(Math.Log));
+        _campKpis.Children.Clear();
+        foreach (var (label, v, tip) in new[]
+        {
+            ("Concorde here", rHere, "APEX exact ÷ Concorde + QSopt on this machine"),
+            ("Concorde 2003", r03, "APEX exact ÷ Concorde 2003 published (2.8 GHz Xeon)"),
+            ("Concorde 1999", r99, "APEX exact ÷ Concorde 1999 published (500 MHz Alpha)"),
+            ("Concorde 1998", r98, "APEX exact ÷ Concorde 1998 paper (400 MHz AlphaServer)"),
+            ("first proof", rFirst, "APEX exact ÷ the first published optimality proof"),
+            ("Concorde here ÷ 2003", c03, "not APEX: Concorde on this machine ÷ Concorde 2003 published (hardware + version)"),
+        })
+        {
+            var g = G(v);
+            var tile = new Border
+            {
+                Background = _pal.Brush(_pal.Background), CornerRadius = new CornerRadius(6), Padding = new Thickness(10, 6), Margin = new Thickness(0, 0, 8, 6), MinWidth = 120,
+                Child = new StackPanel
+                {
+                    Children =
+                    {
+                        new TextBlock { Text = label, FontSize = 11, Foreground = muted },
+                        new TextBlock { Text = g is { } x ? x.ToString("0.##", CultureInfo.InvariantCulture) + "x" : "-", FontSize = 20, FontWeight = FontWeight.SemiBold,
+                                        Foreground = g is not { } y ? muted : y <= 1 ? good : bad },
+                        new TextBlock { Text = v.Count == 1 ? "1 instance" : $"{v.Count} instances", FontSize = 11, Foreground = muted },
+                    },
+                },
+            };
+            ToolTip.SetTip(tile, tip);
+            _campKpis.Children.Add(tile);
+        }
         _campSummary.Text =
-            "Times in seconds, proven optimum only (\"limit\" = time box reached). Ratio = APEX exact time ÷ the other time: above 1x APEX is slower, below 1x faster.\n" +
-            $"Geometric mean — APEX ÷ Concorde on this machine: {G(rHere)} ({rHere.Count} instances) · APEX ÷ Concorde 2003 published: {G(r03)} ({r03.Count}) · " +
-            $"APEX ÷ Concorde 1999 published: {G(r99)} ({r99.Count}) · APEX ÷ Concorde 1998 paper: {G(r98)} ({r98.Count}) · APEX ÷ first solution: {G(rFirst)} ({rFirst.Count}) · " +
-            $"Concorde here ÷ Concorde 2003 (hardware + version): {G(c03)} ({c03.Count}).\n" +
-            "First solved: date and solution time of the first optimality proof — National and VLSI instances from their Waterloo 'Log of Computation' pages (Concorde, 2001 Athlon 1.33 GHz / 2002 Athlon 1900+); " +
+            "Times: proven optimum only (\"limit\" = time box reached); s, h, d, y = seconds, hours, days, years. Ratio = APEX exact time ÷ the other time: above 1x APEX is slower (red), below 1x faster (green). " +
+            "Hover a header or a cell for the source and hardware.\n" +
+            "First proof: date and solution time of the first optimality proof — National and VLSI instances from their Waterloo 'Log of Computation' pages (Concorde, 2001 Athlon 1.33 GHz / 2002 Athlon 1900+); " +
             "TSPLIB: usa13509, d15112, pla85900 (published CPU years). 1998 Alpha: the 1977-1992 TSPLIB records re-solved by Applegate, Bixby, Chvátal and Cook (Documenta Math. ICM 1998, 400 MHz AlphaServer); " +
             "the original 1977-1991 TSPLIB run times are only in the original papers. Hardware differs per row: ratios compare this machine with the published one.";
         if (!_campaignActive)
-            _campStatus.Text = $"{inst.Count} instances (n <= {(int)(_campMaxN.Value ?? 0)}), {total} results in {dir}";
+            _campStatus.Text = $"{inst.Count} instances (n {(int)(_campMinN.Value ?? 0)} to {(int)(_campMaxN.Value ?? 0)}), {total} results in {dir}";
     }
 
     private void GenerateReport()
