@@ -73,7 +73,7 @@ TEST_CASE("T_report_json") {
     CHECK(a.str() ==
           "{\"instance\":\"mona \\\"lisa\\\"\\n\",\"mode\":\"scalable\",\"status\":\"done\",\"ub\":5938927,\"lb\":null,"
           "\"lb_source\":null,\"gap_pct\":null,\"wall_s\":1.235,\"ram_peak_bytes\":123,\"disk_bytes\":0,\"iterations\":0,"
-          "\"refactorizations\":0,\"cuts_by_family\":{\"sec\":0,\"blossom\":0,\"component\":0,\"comb\":0},\"tours_found\":0,"
+          "\"refactorizations\":0,\"cuts_by_family\":{\"sec\":0,\"blossom\":0,\"component\":0,\"comb\":0,\"domino\":0},\"tours_found\":0,"
           "\"seed\":42,\"threads\":1,\"hardware\":\"cpu\",\"mem_limit_mb\":4096,\"verification_rounds\":0}\n");
     CHECK(a.str() == apex::report_json(r));
     r.lb = 5757084;

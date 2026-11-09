@@ -35,7 +35,7 @@ struct Report {
     uint64_t disk_bytes = 0;            // checkpoint directory size at the end
     uint64_t iterations = 0;            // simplex iterations (exact mode; 0 in scalable mode)
     uint64_t refactorizations = 0;
-    uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0;  // cuts_by_family
+    uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0, cuts_dp = 0;  // cuts_by_family
     uint64_t tours_found = 0;           // UB improvements over the run
     std::string hardware;               // CPU brand string + logical cores
     uint64_t mem_limit_mb = 0;

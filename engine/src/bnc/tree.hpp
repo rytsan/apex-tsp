@@ -84,7 +84,7 @@ struct BnCResult {
     uint64_t strong_pivots = 0, strong_candidates = 0, max_node_strong_pivots = 0;  // warm starts whose basis needed dual repair with unchanged columns (must stay 0)
     uint64_t heuristic_calls = 0;
     // Totals over root and nodes (report, M5.2). Not checkpointed: a resumed run counts its own part.
-    uint64_t lp_iterations = 0, refactorizations = 0, cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0;
+    uint64_t lp_iterations = 0, refactorizations = 0, cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0, cuts_dp = 0;
     uint64_t dive_calls = 0, dive_tours = 0, dive_pivots = 0;
     bool rih_improved = false;
     double heuristic_s = 0;

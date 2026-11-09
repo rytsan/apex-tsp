@@ -58,6 +58,7 @@ add_library(apex_core STATIC
     src/cuts/mincut.cpp
     src/cuts/blossom.cpp
     src/cuts/comb.cpp
+    src/cuts/domino.cpp
     src/cuts/pool.cpp
     src/bnc/root_loop.cpp
     src/bnc/branching.cpp
@@ -93,6 +94,7 @@ add_executable(engine_tests
     tests/test_mincut.cpp
     tests/test_blossom.cpp
     tests/test_comb.cpp
+    tests/test_domino.cpp
     tests/test_pool.cpp
     tests/test_root_loop.cpp
     tests/test_tree.cpp

@@ -65,6 +65,17 @@ void CutPool::stage_comb(const CombCut& c) {
     staged_.push_back(std::move(p));
 }
 
+void CutPool::stage_dp(const DpCut& c) {
+    PoolCut p{CutKind::Domino, c.handle, {}, 0, 0, -1, 0, {}};
+    std::sort(p.nodes.begin(), p.nodes.end());
+    auto dom = c.dominoes;
+    std::sort(dom.begin(), dom.end());
+    for (auto& d : dom) { p.sets.push_back(d.a); p.sets.push_back(d.b); }
+    p.hash = hash_of(p);
+    std::lock_guard<std::mutex> lock(mu_);
+    staged_.push_back(std::move(p));
+}
+
 bool CutPool::insert(PoolCut&& c) {
     auto& bucket = by_hash_[c.hash];
     for (size_t i : bucket)
@@ -99,6 +110,15 @@ Row CutPool::make_row(const PoolCut& c, const std::vector<Edge>& lp_edges) const
     for (uint32_t v : c.nodes) in[v] = 1;
     Row r;
     r.sense = Sense::Ge;
+    if (c.kind == CutKind::Domino) {
+        std::vector<Domino> dom;
+        for (size_t k = 0; k + 1 < c.sets.size(); k += 2) dom.push_back({c.sets[k], c.sets[k + 1]});
+        const DpMembership mem(n, c.nodes, dom);
+        r.rhs = 3.0 * static_cast<double>(dom.size()) + 1.0;
+        for (uint32_t j = 0; j < lp_edges.size(); ++j)
+            if (const int coef = mem.coef(lp_edges[j].u, lp_edges[j].v)) r.entries.push_back({j, static_cast<double>(coef)});
+        return r;
+    }
     if (c.kind == CutKind::Comb) {
         std::vector<uint32_t> tooth(n, 0);  // 1 + tooth index; teeth are disjoint
         for (uint32_t k = 0; k < c.sets.size(); ++k)
@@ -192,7 +212,7 @@ void CutPool::save(std::ostream& o) const {
         put_vec(o, c.nodes);
         put(o, static_cast<uint64_t>(c.teeth.size()));
         for (const auto& [u, v] : c.teeth) { put(o, u); put(o, v); }
-        if (c.kind == CutKind::Comb) {  // only combs carry sets: older checkpoints load unchanged
+        if (c.kind == CutKind::Comb || c.kind == CutKind::Domino) {  // only these carry sets: older checkpoints load unchanged
             put(o, static_cast<uint64_t>(c.sets.size()));
             for (const auto& s : c.sets) put_vec(o, s);
         }
@@ -226,7 +246,7 @@ void CutPool::load(std::istream& in) {
             const auto u = get<uint32_t>(in);
             c.teeth.push_back({u, get<uint32_t>(in)});
         }
-        if (c.kind == CutKind::Comb) {
+        if (c.kind == CutKind::Comb || c.kind == CutKind::Domino) {
             const auto k = get<uint64_t>(in);
             for (uint64_t i = 0; i < k; ++i) c.sets.push_back(get_vec<uint32_t>(in));
         }

@@ -20,6 +20,7 @@ struct RootLoopConfig {
     BlossomConfig blossom;
     bool use_blossom = true;
     bool use_comb = true;               // combs from blossoms of the x_e = 1-shrunk support
+    bool use_dp = true;                 // domino-parity (planar dual, needs coordinates)
     uint32_t age_limit = 10;
     uint32_t max_cuts_per_round = 500;  // most violated first
     uint32_t max_rounds = 10000;
@@ -43,7 +44,7 @@ struct RootRoundLog {
     uint32_t round;
     double lp_value;
     double global_lb;  // Farley bound at this round (valid for the complete graph)
-    uint32_t rows, new_component, new_sec, new_blossom, new_comb, reactivated, aged_out;
+    uint32_t rows, new_component, new_sec, new_blossom, new_comb, new_dp, reactivated, aged_out;
     uint64_t lp_iterations;
     double lp_s, sep_s;
 };
@@ -66,7 +67,7 @@ struct RootLoopResult {
     uint64_t pricing_calls = 0;      // complete-graph pricing passes (each one a verification)   // initial dual-feasibility repairs of the first solve (warm-start check)
     uint64_t priced_edges = 0;       // columns added by pricing (status kNewPricing)
     uint32_t rcf_fixed0 = 0, rcf_fixed1 = 0;
-    uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0;
+    uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0, cuts_dp = 0;
     double lp_s = 0, sep_s = 0, pricing_s = 0, total_s = 0;
     std::vector<RootRoundLog> rounds;
     PoolStats pool;

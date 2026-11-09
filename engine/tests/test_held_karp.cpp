@@ -41,6 +41,8 @@ TEST_CASE("T_hk_convergence") {
     const auto hk = apex::held_karp(inst, g, 259045, apex::HkConfig{});
     apex::RootLoopConfig cfg;
     cfg.use_blossom = false;
+    cfg.use_comb = false;
+    cfg.use_dp = false;
     apex::CutLoop loop(inst, g, cfg);
     const auto r = loop.solve({}, nullptr, apex::NodeLimits{});
     REQUIRE(r.converged);

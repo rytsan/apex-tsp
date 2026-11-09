@@ -11,6 +11,7 @@
 
 #include "bnc/rcf.hpp"
 #include "cuts/comb.hpp"
+#include "cuts/domino.hpp"
 #include "core/serial.hpp"
 #include "cuts/support.hpp"
 
@@ -220,7 +221,7 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
     bool added_columns = false;  // previous round added priced columns (LP value may drop)
 
     for (uint32_t round = 0;; ++round) {
-        RootRoundLog log{round, 0, -INFINITY, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+        RootRoundLog log{round, 0, -INFINITY, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
         auto tl = Clock::now();
         auto res = solve_dual(lp_, cfg_.lp, warm_ ? &basis_ : nullptr);
         log.lp_s = secs(tl);
@@ -310,6 +311,10 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
         std::vector<CombCut> cb;
         if (cfg_.use_comb && secs_found.empty()) cb = separate_comb(sup, cfg_.blossom);
         for (const auto& c : cb) pool_.stage_comb(c);
+        std::vector<DpCut> dp;
+        if (cfg_.use_dp && secs_found.empty()) dp = separate_dp(sup, inst_.xs, inst_.ys);
+        if (dp.size() > 200) dp.resize(200);  // most violated first
+        for (const auto& c : dp) pool_.stage_dp(c);
         for (size_t idx : pool_.commit()) {
             const double v = pool_.violation(pool_.at(idx), g_.edges, res.x);  // exact on LP columns
             if (v > cfg_.sec.violation_tol) cand.push_back({v, idx});
@@ -318,6 +323,7 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
         log.new_sec = sst.stoer_wagner_cuts + sst.pairwise_cuts;
         log.new_blossom = static_cast<uint32_t>(bl.size());
         log.new_comb = static_cast<uint32_t>(cb.size());
+        log.new_dp = static_cast<uint32_t>(dp.size());
         log.sep_s = secs(ts);
         out.sep_s += log.sep_s;
         std::sort(cand.begin(), cand.end(), [](const auto& a, const auto& b) { return a.first > b.first || (a.first == b.first && a.second < b.second); });
@@ -327,12 +333,13 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
         out.cuts_sec += log.new_sec;
         out.cuts_blossom += log.new_blossom;
         out.cuts_comb += log.new_comb;
+        out.cuts_dp += log.new_dp;
         pool_.note_reactivated(log.reactivated);
         out.rounds.push_back(log);
         if (tel_)
             tel_->event("cut_round", {{"round", std::to_string(round)}, {"lp", fmt(log.lp_value, 4)},
                                       {"rows", std::to_string(log.rows)}, {"comp", std::to_string(log.new_component)},
-                                      {"sec", std::to_string(log.new_sec)}, {"blossom", std::to_string(log.new_blossom)}, {"comb", std::to_string(log.new_comb)},
+                                      {"sec", std::to_string(log.new_sec)}, {"blossom", std::to_string(log.new_blossom)}, {"comb", std::to_string(log.new_comb)}, {"dp", std::to_string(log.new_dp)},
                                       {"pool", std::to_string(log.reactivated)}, {"aged", std::to_string(log.aged_out)},
                                       {"iters", std::to_string(log.lp_iterations)}, {"lp_s", fmt(log.lp_s)},
                                       {"sep_s", fmt(log.sep_s)}});
@@ -412,7 +419,7 @@ RootLoopResult run_root_loop(const Instance& inst, CandidateGraph& g, const Root
                                  {"global_lb", fmt(out.global_lb, 4)}, {"lb_source", "lp"},
                                  {"negative_rc_edges", std::to_string(out.negative_rc_edges)},
                                  {"pricing_rounds", std::to_string(out.pricing_rounds)}, {"priced_edges", std::to_string(out.priced_edges)},
-                                 {"cuts_sec", std::to_string(out.cuts_sec)}, {"cuts_blossom", std::to_string(out.cuts_blossom)}, {"cuts_comb", std::to_string(out.cuts_comb)},
+                                 {"cuts_sec", std::to_string(out.cuts_sec)}, {"cuts_blossom", std::to_string(out.cuts_blossom)}, {"cuts_comb", std::to_string(out.cuts_comb)}, {"cuts_dp", std::to_string(out.cuts_dp)},
                                  {"cuts_component", std::to_string(out.cuts_component)},
                                  {"rcf_fixed0", std::to_string(out.rcf_fixed0)}, {"rcf_fixed1", std::to_string(out.rcf_fixed1)},
                                  {"lp_s", fmt(out.lp_s)}, {"sep_s", fmt(out.sep_s)}, {"pricing_s", fmt(out.pricing_s)},

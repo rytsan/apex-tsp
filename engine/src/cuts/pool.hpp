@@ -10,13 +10,14 @@
 
 #include "cuts/blossom.hpp"
 #include "cuts/comb.hpp"
+#include "cuts/domino.hpp"
 #include "cuts/support.hpp"
 #include "graph/candidate_graph.hpp"
 #include "lp/csc.hpp"
 
 namespace apex {
 
-enum class CutKind : uint8_t { Sec, Blossom, Comb };
+enum class CutKind : uint8_t { Sec, Blossom, Comb, Domino };
 
 struct PoolCut {
     CutKind kind;
@@ -26,10 +27,12 @@ struct PoolCut {
     uint64_t id = 0;              // insertion sequence (deterministic)
     int32_t lp_row = -1;          // row index while in the LP, -1 in the pool
     uint32_t inactive_rounds = 0; // consecutive re-solves with zero dual
-    std::vector<std::vector<uint32_t>> sets;              // comb teeth (each sorted; sorted)
+    std::vector<std::vector<uint32_t>> sets;              // comb: teeth; domino-parity: A_1, B_1, A_2, B_2, ...
 
-    // Node sets S_i with row = sum_i x(delta(S_i)) >= rhs plus, for blossoms, the -1 teeth
-    // (always LP columns). Pricing / dual bounds price an edge outside the LP with these.
+    // Node sets S_i with coefficient(e) <= sum_i [e crosses S_i] (equality for SEC / comb; for
+    // domino-parity the parity term is bounded by its count, so the reduced cost of an edge
+    // outside the LP is underestimated: still a valid dual bound). Blossom -1 teeth are LP columns.
+    // Pricing / dual bounds price an edge outside the LP with these.
     template <class F> void for_each_set(F f) const {
         f(nodes);
         for (const auto& s : sets) f(s);
@@ -62,6 +65,7 @@ public:
     void stage_sec(const SecCut& c);          // thread-safe
     void stage_blossom(const BlossomCut& c);  // thread-safe
     void stage_comb(const CombCut& c);        // thread-safe
+    void stage_dp(const DpCut& c);            // thread-safe
     // Moves staged cuts into the pool (dedup); returns indices of newly inserted cuts.
     std::vector<size_t> commit();
 
@@ -71,7 +75,7 @@ public:
 
     // LP row of a cut over the LP columns (endpoints lp_edges[j]):
     // SEC x(delta(S)) >= 2; blossom x(delta(H) \ T) - x(T) >= 1 - |T|;
-    // comb x(delta(H)) + sum_j x(delta(T_j)) >= 3k + 1.
+    // comb x(delta(H)) + sum_j x(delta(T_j)) >= 3k + 1; domino-parity as in cuts/domino.hpp.
     Row make_row(const PoolCut& c, const std::vector<Edge>& lp_edges) const;
     // Violation of a cut for LP solution x (> 0 means violated).
     double violation(const PoolCut& c, const std::vector<Edge>& lp_edges, const std::vector<double>& x) const;

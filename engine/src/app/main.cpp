@@ -434,6 +434,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         rep.cuts_sec = bnc_result.cuts_sec;
         rep.cuts_blossom = bnc_result.cuts_blossom;
         rep.cuts_comb = bnc_result.cuts_comb;
+        rep.cuts_dp = bnc_result.cuts_dp;
         rep.cuts_component = bnc_result.cuts_component;
         rep.verification_rounds = bnc_result.verification_pricing_calls;
     }

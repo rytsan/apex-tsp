@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <set>
 
+#include "core/control.hpp"
 #include "cuts/shrink.hpp"
 
 namespace apex {
@@ -186,6 +187,7 @@ std::vector<CombCut> separate_comb(const SupportGraph& g, const BlossomConfig& c
     std::vector<std::vector<uint32_t>> teeth;
     for (const auto& h : handles) {
         if (h.size() >= g.n) continue;
+        pause_point();
         if (th.comb_for(h, teeth)) {
             ++st.teething;
             emit(h, teeth);

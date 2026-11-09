@@ -104,7 +104,7 @@ struct NodeOutcome {
     double lp_s = 0, sep_s = 0, pricing_s = 0, heuristic_s = 0;
     uint64_t dive_calls = 0, dive_tours = 0, dive_pivots = 0;
     uint64_t peak_factor_nnz = 0, lp_nnz = 0;  // memory budget inputs
-    uint64_t lp_iterations = 0, refactorizations = 0, cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0;
+    uint64_t lp_iterations = 0, refactorizations = 0, cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0, cuts_dp = 0;
     uint64_t pricing_calls = 0, priced = 0, heuristic_calls = 0, strong_pivots = 0, strong_candidates = 0, rcf_node_fixings = 0;
     TreeNodeInfo info;                   // GUI tree view (state set by Tree::apply)
     std::vector<LpSupportEdge> support;  // node LP support, only when requested (GUI LP view)
@@ -140,6 +140,7 @@ void conclude(const Instance& inst, CandidateGraph& g, CutLoop& loop, Pseudocost
     o.cuts_sec += r.cuts_sec;
     o.cuts_blossom += r.cuts_blossom;
     o.cuts_comb += r.cuts_comb;
+    o.cuts_dp += r.cuts_dp;
     o.cuts_component += r.cuts_component;
     if (r.infeasible) { o.kind = NodeOutcome::Kind::Infeasible; return; }
     if (r.cutoff) { o.kind = NodeOutcome::Kind::Pruned; return; }
@@ -600,6 +601,7 @@ private:
         out_.cuts_sec += o.cuts_sec;
         out_.cuts_blossom += o.cuts_blossom;
         out_.cuts_comb += o.cuts_comb;
+        out_.cuts_dp += o.cuts_dp;
         out_.cuts_component += o.cuts_component;
         out_.heuristic_calls += o.heuristic_calls;
         out_.dive_calls += o.dive_calls;
