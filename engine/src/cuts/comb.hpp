@@ -24,13 +24,16 @@ double comb_violation(const SupportGraph& g, const std::vector<uint32_t>& handle
                       const std::vector<std::vector<uint32_t>>& teeth);
 
 struct CombStats {
-    uint32_t candidates = 0, invalid = 0, cuts = 0;
+    uint32_t candidates = 0, invalid = 0, cuts = 0, teething = 0;
     uint32_t shrunk_nodes = 0;
 };
 
 // Combs from blossoms of the shrunk support graph: contract x_e = 1 chains (shrink_unit_edges),
 // separate blossoms there (Padberg-Rao exact when the shrunk graph is small), expand each
 // blossom: handle = union of its supernodes, tooth (A, B) = members(A) + members(B).
+// Teething: on every heuristic handle (and every handle found above) each crossing support edge
+// seeds a tooth grown while x(delta(T)) does not increase; disjoint teeth are picked greedily by
+// benefit 3 - x(delta(T)) with a parity fix.
 // Plain blossoms (every tooth two nodes, handle unchanged) are left to separate_blossom.
 // Every cut is checked with comb_valid and re-verified exactly on `g`; sorted by violation.
 std::vector<CombCut> separate_comb(const SupportGraph& g, const BlossomConfig& cfg = {}, CombStats* stats = nullptr);

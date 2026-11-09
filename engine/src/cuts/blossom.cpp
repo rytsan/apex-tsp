@@ -86,6 +86,23 @@ double best_teeth(const SupportGraph& g, const std::vector<uint32_t>& handle, st
     return 1.0 - sum;
 }
 
+std::vector<std::vector<uint32_t>> heuristic_handles(const SupportGraph& g) {
+    std::vector<std::vector<uint32_t>> out;
+    for (double eps : {1e-6, 0.1, 0.25}) {
+        std::vector<Edge> fe;
+        std::vector<double> fx;
+        for (const auto& e : g.edges)
+            if (e.cap > eps && e.cap < 1.0 - eps) {
+                fe.push_back(Edge{e.u, e.v, 0, 0, 0.0});
+                fx.push_back(e.cap);
+            }
+        const auto fg = build_support(g.n, fe, fx, 0.0);
+        for (auto& comp : connected_components(fg))
+            if (comp.size() >= 3) out.push_back(std::move(comp));
+    }
+    return out;
+}
+
 std::vector<BlossomCut> separate_blossom(const SupportGraph& g, const BlossomConfig& cfg, BlossomStats* stats) {
     BlossomStats st;
     st.heuristic = cfg.mode == BlossomMode::Heuristic;
@@ -107,19 +124,7 @@ std::vector<BlossomCut> separate_blossom(const SupportGraph& g, const BlossomCon
         ++counter;
     };
 
-    // Heuristic handles: components of {e : eps < x_e < 1 - eps} for several eps.
-    for (double eps : {1e-6, 0.1, 0.25}) {
-        std::vector<Edge> fe;
-        std::vector<double> fx;
-        for (const auto& e : g.edges)
-            if (e.cap > eps && e.cap < 1.0 - eps) {
-                fe.push_back(Edge{e.u, e.v, 0, 0, 0.0});
-                fx.push_back(e.cap);
-            }
-        const auto fg = build_support(g.n, fe, fx, 0.0);
-        for (const auto& comp : connected_components(fg))
-            if (comp.size() >= 3) consider(comp, st.heuristic_cuts);
-    }
+    for (const auto& h : heuristic_handles(g)) consider(h, st.heuristic_cuts);
 
     if (cfg.mode == BlossomMode::Full && g.n >= 2) {
         // Padberg-Rao: split every support edge e = (i, j) with node k_e; arcs (i, k_e) cap x_e,

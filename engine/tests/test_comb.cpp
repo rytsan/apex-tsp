@@ -83,6 +83,7 @@ TEST_CASE("T_comb_separates_chain_gadget") {
     apex::CombStats st;
     const auto cuts = apex::separate_comb(g, {}, &st);
     REQUIRE(!cuts.empty());
+    CHECK(st.teething > 0);  // the heuristic handles + grown teeth also reach this comb
     const auto& c = cuts[0];
     CHECK(c.violation == doctest::Approx(0.4));
     CHECK(c.teeth.size() == 3);

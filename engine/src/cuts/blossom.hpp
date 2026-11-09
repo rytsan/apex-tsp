@@ -31,6 +31,10 @@ double best_teeth(const SupportGraph& g, const std::vector<uint32_t>& handle, st
 double blossom_violation(const SupportGraph& g, const std::vector<uint32_t>& handle,
                          const std::vector<BlossomTooth>& teeth);
 
+// Heuristic handle candidates: connected components (>= 3 nodes) of {e : eps < x_e < 1 - eps}
+// for eps in {1e-6, 0.1, 0.25} (Padberg-Hong / Groetschel-Holland). Also used for combs.
+std::vector<std::vector<uint32_t>> heuristic_handles(const SupportGraph& g);
+
 enum class BlossomMode { Heuristic, Full };
 
 struct BlossomConfig {
