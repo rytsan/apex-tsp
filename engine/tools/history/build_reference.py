@@ -86,12 +86,19 @@ UNIT_S = {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400, "years": 36
 
 
 def parse_time(said):
-    """'560,951 seconds, AMD Athlon 1900+' -> (seconds, '560,951 seconds', 'AMD Athlon 1900+')."""
-    m = re.match(r"([\d.,]+)\s*(million\s+)?(seconds|minutes|hours|days|years)\s*,?\s*(.*)", said)
-    if not m:
+    """'560,951 seconds, AMD Athlon 1900+' -> (seconds, '560,951 seconds', 'AMD Athlon 1900+');
+    '8 hours, 12 minutes (24-core Xeon)' -> (29520, '8 hours, 12 minutes', '24-core Xeon')."""
+    part = r"([\d.,]*\d)\s*(million\s+)?(seconds|minutes|hours|days|years)"
+    v, end, pos = 0.0, None, 0
+    while m := re.compile(r"\s*(?:,|and)?\s*" + part).match(said, pos) if end is not None else re.match(part, said):
+        v += float(m.group(1).replace(",", "")) * (1e6 if m.group(2) else 1) * UNIT_S[m.group(3)]
+        end = pos = m.end()
+    if end is None:
         return None, said, ""
-    v = float(m.group(1).replace(",", "")) * (1e6 if m.group(2) else 1) * UNIT_S[m.group(3)]
-    return v, said[: m.end(3)].strip(), m.group(4).strip()
+    hw = said[end:].strip().lstrip(",").strip()
+    if hw.startswith("(") and hw.endswith(")"):
+        hw = hw[1:-1]
+    return v, said[:end].strip(), hw
 
 
 def waterloo_rows():

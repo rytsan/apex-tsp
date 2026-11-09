@@ -47,3 +47,7 @@ for f in sorted(os.listdir(os.path.join(ROOT, "data"))):
         assert int(m.group(1)) == int(row[0]["value"]), f"{f}: comment {m.group(1)} != reference {row[0]['value']}"
         checked += 1
 print(f"reference.csv OK: {len(ref)} rows, {len(man)} pinned files, {checked} values cross-checked with .opt.tour comments")
+
+from build_reference import parse_time  # noqa: E402
+assert parse_time("8 hours, 12 minutes (24-core Intel Xeon E5-2620 @ 2.00GHz)") == (29520, "8 hours, 12 minutes", "24-core Intel Xeon E5-2620 @ 2.00GHz")
+assert parse_time("560,951 seconds, AMD Athlon 1900+") == (560951, "560,951 seconds", "AMD Athlon 1900+")
