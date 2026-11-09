@@ -9,22 +9,31 @@
 #include <vector>
 
 #include "cuts/blossom.hpp"
+#include "cuts/comb.hpp"
 #include "cuts/support.hpp"
 #include "graph/candidate_graph.hpp"
 #include "lp/csc.hpp"
 
 namespace apex {
 
-enum class CutKind : uint8_t { Sec, Blossom };
+enum class CutKind : uint8_t { Sec, Blossom, Comb };
 
 struct PoolCut {
     CutKind kind;
-    std::vector<uint32_t> nodes;                          // SEC: S; blossom: handle (sorted)
+    std::vector<uint32_t> nodes;                          // SEC: S; blossom / comb: handle (sorted)
     std::vector<std::pair<uint32_t, uint32_t>> teeth;     // blossom teeth endpoints (u < v), sorted
     uint64_t hash = 0;
     uint64_t id = 0;              // insertion sequence (deterministic)
     int32_t lp_row = -1;          // row index while in the LP, -1 in the pool
     uint32_t inactive_rounds = 0; // consecutive re-solves with zero dual
+    std::vector<std::vector<uint32_t>> sets;              // comb teeth (each sorted; sorted)
+
+    // Node sets S_i with row = sum_i x(delta(S_i)) >= rhs plus, for blossoms, the -1 teeth
+    // (always LP columns). Pricing / dual bounds price an edge outside the LP with these.
+    template <class F> void for_each_set(F f) const {
+        f(nodes);
+        for (const auto& s : sets) f(s);
+    }
 };
 
 struct PoolStats {
@@ -52,6 +61,7 @@ public:
 
     void stage_sec(const SecCut& c);          // thread-safe
     void stage_blossom(const BlossomCut& c);  // thread-safe
+    void stage_comb(const CombCut& c);        // thread-safe
     // Moves staged cuts into the pool (dedup); returns indices of newly inserted cuts.
     std::vector<size_t> commit();
 
@@ -60,7 +70,8 @@ public:
     const PoolCut& at(size_t i) const { return cuts_[i]; }
 
     // LP row of a cut over the LP columns (endpoints lp_edges[j]):
-    // SEC x(delta(S)) >= 2; blossom x(delta(H) \ T) - x(T) >= 1 - |T|.
+    // SEC x(delta(S)) >= 2; blossom x(delta(H) \ T) - x(T) >= 1 - |T|;
+    // comb x(delta(H)) + sum_j x(delta(T_j)) >= 3k + 1.
     Row make_row(const PoolCut& c, const std::vector<Edge>& lp_edges) const;
     // Violation of a cut for LP solution x (> 0 means violated).
     double violation(const PoolCut& c, const std::vector<Edge>& lp_edges, const std::vector<double>& x) const;

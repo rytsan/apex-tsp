@@ -183,7 +183,7 @@ std::string report_json(const Report& r) {
     out << ",\"wall_s\":" << num << ",\"ram_peak_bytes\":" << r.ram_peak_bytes << ",\"disk_bytes\":" << r.disk_bytes
         << ",\"iterations\":" << r.iterations << ",\"refactorizations\":" << r.refactorizations
         << ",\"cuts_by_family\":{\"sec\":" << r.cuts_sec << ",\"blossom\":" << r.cuts_blossom
-        << ",\"component\":" << r.cuts_component << "},\"tours_found\":" << r.tours_found << ",\"seed\":" << r.seed
+        << ",\"component\":" << r.cuts_component << ",\"comb\":" << r.cuts_comb << "},\"tours_found\":" << r.tours_found << ",\"seed\":" << r.seed
         << ",\"threads\":" << r.threads << ",\"hardware\":";
     json_string(out, r.hardware);
     out << ",\"mem_limit_mb\":" << r.mem_limit_mb << ",\"verification_rounds\":" << r.verification_rounds << "}\n";

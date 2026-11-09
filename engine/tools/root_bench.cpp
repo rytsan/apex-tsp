@@ -38,6 +38,7 @@ int main(int argc, char** argv) {
             else if (f == "--time-limit") time_limit = std::stod(val());
             else if (f == "--seed") seed = std::stoull(val());
             else if (f == "--no-blossom") cfg.use_blossom = false;
+            else if (f == "--no-comb") cfg.use_comb = false;
             else if (f == "--tree") tree = true;
             else if (f == "--best-bound") best_bound = true;
             else if (f == "--parallel-lps") parallel_lps = static_cast<uint32_t>(std::stoul(val()));
@@ -139,9 +140,9 @@ int main(int argc, char** argv) {
         std::printf("  ub_2opt = %lld   gap_vs_ub = %.4f%%   honesty: global_lb <= ref: %s, lp_value <= ref: %s\n",
                     static_cast<long long>(cfg.ub), 100.0 * (cfg.ub - r.global_lb) / cfg.ub,
                     r.global_lb <= ref + 1e-6 ? "OK" : "VIOLATED", r.lp_value <= ref + 1e-6 ? "OK" : "VIOLATED");
-        std::printf("  cuts: component=%llu sec=%llu blossom=%llu  pool size=%zu in_lp=%zu aged_out=%llu dup=%llu\n",
+        std::printf("  cuts: component=%llu sec=%llu blossom=%llu comb=%llu  pool size=%zu in_lp=%zu aged_out=%llu dup=%llu\n",
                     static_cast<unsigned long long>(r.cuts_component), static_cast<unsigned long long>(r.cuts_sec),
-                    static_cast<unsigned long long>(r.cuts_blossom), r.pool.size, r.pool.in_lp,
+                    static_cast<unsigned long long>(r.cuts_blossom), static_cast<unsigned long long>(r.cuts_comb), r.pool.size, r.pool.in_lp,
                     static_cast<unsigned long long>(r.pool.aged_out), static_cast<unsigned long long>(r.pool.duplicates));
         std::printf("  pricing: rounds=%u priced_edges=%llu final_edges=%zu\n", r.pricing_rounds,
                     static_cast<unsigned long long>(r.priced_edges), g.edges.size());
