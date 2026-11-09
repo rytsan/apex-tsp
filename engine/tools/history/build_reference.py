@@ -75,13 +75,12 @@ HISTORY_ONLY = {"dantzig42": "EXPLICIT", "gr120": "EXPLICIT", "att532": "ATT", "
 
 # Waterloo collections (EUC_2D): National TSPs and VLSI. Each instance has a "Log of Computation"
 # page with the date it was solved, the solution time and the machine; the summary page gives the
-# best tour / bound. Instances up to SET_MAX_N nodes join the benchmark set.
+# best tour / bound. Every instance joins the benchmark set (open ones against their best known tour).
 WATERLOO = {
     "national": ("https://www.math.uwaterloo.ca/tsp/world/", ["countries.html"], r'href="\.?/?([a-z]{2}log\.html)"'),
     "vlsi": ("https://www.math.uwaterloo.ca/tsp/vlsi/", ["index.html"] + [f"page{k}.html" for k in range(2, 12)],
              r'href="\.?/?([a-z]+\d+\.log\.html)"'),
 }
-SET_MAX_N = 1002
 UNIT_S = {"seconds": 1, "minutes": 60, "hours": 3600, "days": 86400, "years": 365.25 * 86400}
 
 
@@ -109,7 +108,7 @@ def waterloo_rows():
             logs |= set(re.findall(link, get(base + pg).decode("latin1")))
         summ = text(base + "summary.html")
         best = {}
-        for name, gap, bound, tour in re.findall(r"\b([a-z]+\d+) (Optimal|[\d.]+%) ([\d,.]+) ([\d,.]+)", summ):
+        for name, gap, bound, tour in re.findall(r"\b([a-z]+\d+) (Optimal|[\d.]+%|x\.x%) ([\d,.]+|xxx) ([\d,.]+)", summ):
             best[name] = (gap, int(re.sub(r"[,.]", "", tour)), bound)  # "9.352" (qa194) is a typo for 9,352
         for lg in sorted(logs):
             t = text(base + lg)
@@ -125,12 +124,10 @@ def waterloo_rows():
             solved = re.search(r"Solved: (\w+ \d+, (\d{4}))", t)
             st = re.search(r"Solution Time: (.+?)(?: History| Notes| Note \d)", t)
             r = {"collection": coll, "instance": name, "n": n, "metric": "EUC_2D",
-                 "in_set": "yes" if n <= SET_MAX_N and gap == "Optimal" else "no",
+                 "in_set": "yes",
                  "value": tour, "value_kind": "optimal" if gap == "Optimal" else "best_known_tour", "value_source": base + "summary.html"}
             if gap != "Optimal":
-                r["note"] = f"open: best bound {bound} (gap {gap})"
-            elif n > SET_MAX_N:
-                r["note"] = f"not in the campaign set (n > {SET_MAX_N})"
+                r["note"] = "open: no lower bound published" if bound == "xxx" else f"open: best bound {bound} (gap {gap})"
             if solved:
                 r.update(year_solved=solved.group(2), solved_on=solved.group(1), solved_by="Concorde (Applegate, Bixby, Chvatal, Cook)" if st else "",
                          history_source=base + lg)
@@ -201,7 +198,11 @@ def parse_bench(t, names, order):
 
 def file_info(name, url=None):
     url = url or (MONA_URL if name == "mona-lisa100K" else TSPLIB + name + ".tsp.gz")
-    raw = get(url)
+    try:
+        raw = get(url)
+    except urllib.error.HTTPError:  # the largest Waterloo VLSI files are only published gzipped
+        url += ".gz"
+        raw = get(url)
     if url.endswith(".gz"):
         raw = gzip.decompress(raw)
     head = raw[:4000].decode("latin1")
@@ -265,8 +266,11 @@ def main():
     for r in waterloo_rows():
         if r["in_set"] == "yes":
             url, sha, size, n, metric = file_info(r["instance"], r["url"])
-            if metric != "EUC_2D" or n != r["n"]:
-                sys.exit(f"{r['instance']}: file says {metric} n={n}")
+            if metric != "EUC_2D":
+                sys.exit(f"{r['instance']}: file says {metric}")
+            if n != r["n"]:  # sra104815: the file has DIMENSION 104814; the file is what gets solved
+                r["note"] = "; ".join(x for x in [r.get("note", ""), f"log page says {r['n']} cities, the file {n}"] if x)
+                r["n"] = n
             manifest.append({"instance": r["instance"], "url": url, "sha256": sha, "bytes": size})
         rows.append(r)
 

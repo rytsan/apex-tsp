@@ -53,8 +53,8 @@ public static class CampaignPlan
 public sealed partial class MainWindow
 {
     private readonly TextBox _campDir = new() { MinWidth = 300 };
-    private readonly NumericUpDown _campMinN = new() { Minimum = 0, Maximum = 200000, Value = 0, Increment = 100, FormatString = "0", Width = 130 };
-    private readonly NumericUpDown _campMaxN = new() { Minimum = 0, Maximum = 200000, Value = 1002, Increment = 500, FormatString = "0", Width = 130 };
+    private readonly NumericUpDown _campMinN = new() { Minimum = 0, Maximum = 1000000, Value = 10000, Increment = 1000, FormatString = "0", Width = 130 };
+    private readonly NumericUpDown _campMaxN = new() { Minimum = 0, Maximum = 1000000, Value = 1000000, Increment = 10000, FormatString = "0", Width = 130 };
     private readonly Button _campReset = new() { Content = "Reset results" };
     private DateTime _resetArmed;
     private readonly Dictionary<string, CheckBox> _campSolver = [];
@@ -171,7 +171,7 @@ public sealed partial class MainWindow
         left.Children.Add(table);
         var right = Card("Running now", live, fill: true);
         right.Margin = new Thickness(6, 0, 12, 12);
-        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,380") };
+        var grid = new Grid { ColumnDefinitions = new ColumnDefinitions("*,340") };
         grid.Children.Add(left);
         Grid.SetColumn(right, 1);
         grid.Children.Add(right);
@@ -489,24 +489,25 @@ public sealed partial class MainWindow
     // Table columns: header, width, header tooltip. Groups span columns: (title, first column, count).
     private static readonly (string Head, double W, string Tip)[] CampCols =
     [
-        ("instance", 92, ""), ("n", 48, "number of cities"),
+        ("instance", 92, ""), ("n", 52, "number of cities"),
+        ("optimum", 84, "optimal tour length (TSPLIB / Waterloo); * = best known tour, not proven optimal"),
         ("year", 44, "year the optimum was first proven (Waterloo milestones, National / VLSI logs)"),
-        ("time", 72, "solution time of the first optimality proof, as published (hardware in the cell tooltip)"),
-        ("1998", 68, "Applegate, Bixby, Chvátal, Cook, Documenta Math. ICM 1998 (400 MHz AlphaServer)"),
-        ("1999", 68, "Concorde 1999 benchmark (500 MHz Alpha)"),
-        ("2003", 68, "Concorde 2003 benchmark (2.8 GHz Xeon)"),
+        ("time", 64, "solution time of the first optimality proof, as published (hardware in the cell tooltip)"),
+        ("1998", 64, "Applegate, Bixby, Chvátal, Cook, Documenta Math. ICM 1998 (400 MHz AlphaServer)"),
+        ("1999", 64, "Concorde 1999 benchmark (500 MHz Alpha)"),
+        ("2003", 64, "Concorde 2003 benchmark (2.8 GHz Xeon)"),
         ("Concorde", 72, "Concorde + QSopt on this machine (test-environment baseline)"),
         ("APEX", 72, "APEX exact on this machine (5 threads, seed 1)"),
         ("here", 52, "APEX exact time ÷ Concorde on this machine"),
-        ("2003", 50, "APEX exact time ÷ Concorde 2003 published"),
-        ("1999", 50, "APEX exact time ÷ Concorde 1999 published"),
-        ("1998", 50, "APEX exact time ÷ Concorde 1998 paper"),
-        ("first", 50, "APEX exact time ÷ first published optimality proof"),
-        ("scalable", 70, "APEX scalable tour vs the reference value"),
-        ("LKH-3", 70, "LKH-3 tour vs the reference value (test-environment baseline)"),
+        ("2003", 46, "APEX exact time ÷ Concorde 2003 published"),
+        ("1999", 46, "APEX exact time ÷ Concorde 1999 published"),
+        ("1998", 46, "APEX exact time ÷ Concorde 1998 paper"),
+        ("first", 46, "APEX exact time ÷ first published optimality proof"),
+        ("scalable", 66, "APEX scalable tour vs the reference value"),
+        ("LKH-3", 66, "LKH-3 tour vs the reference value (test-environment baseline)"),
     ];
     private static readonly (string Title, int From, int Count)[] CampGroups =
-        [("", 0, 2), ("first proof", 2, 2), ("Concorde, published", 4, 3), ("this machine (exact)", 7, 2), ("APEX exact time ÷ Concorde", 9, 5), ("tour vs reference", 14, 2)];
+        [("", 0, 3), ("first proof", 3, 2), ("Concorde, published", 5, 3), ("this machine (exact)", 8, 2), ("APEX exact time ÷ Concorde", 10, 5), ("tour vs reference", 15, 2)];
 
     private static Grid CampGrid()
     {
@@ -592,13 +593,16 @@ public sealed partial class MainWindow
             var row = CampGrid();
             CampCell(row, 0, name, text, rr?.Note ?? "", bold: true);
             CampCell(row, 1, n.ToString(CultureInfo.InvariantCulture), muted);
-            CampCell(row, 2, rr?.Year is { Length: > 0 } y ? y : "-", rr?.Year is { Length: > 0 } ? text : muted, rr?.SolvedBy ?? "");
-            CampCell(row, 3, T(pFirst), pFirst is null ? muted : text, rr?.FirstSolveStated is { Length: > 0 } fs ? $"{fs} ({rr.FirstSolveHw})" : "");
-            CampCell(row, 4, T(p98), p98 is null ? muted : text, rr?.Abcc98Stated ?? "");
-            CampCell(row, 5, rr?.Concorde99 is { Length: > 0 } c99 && p99 is null ? c99 : T(p99), p99 is null ? muted : text, rr?.Concorde99 ?? "");
-            CampCell(row, 6, T(p03), p03 is null ? muted : text);
+            if (rr is null) CampCell(row, 2, "-", muted);
+            else if (rr.Kind == "optimal") CampCell(row, 2, rr.Value.ToString(CultureInfo.InvariantCulture), text, "proven optimum");
+            else CampCell(row, 2, rr.Value.ToString(CultureInfo.InvariantCulture) + "*", muted, "best known tour, not proven optimal" + (rr.Note.Length > 0 ? ": " + rr.Note : ""));
+            CampCell(row, 3, rr?.Year is { Length: > 0 } y ? y : "-", rr?.Year is { Length: > 0 } ? text : muted, rr?.SolvedBy ?? "");
+            CampCell(row, 4, T(pFirst), pFirst is null ? muted : text, rr?.FirstSolveStated is { Length: > 0 } fs ? $"{fs} ({rr.FirstSolveHw})" : "");
+            CampCell(row, 5, T(p98), p98 is null ? muted : text, rr?.Abcc98Stated ?? "");
+            CampCell(row, 6, rr?.Concorde99 is { Length: > 0 } c99 && p99 is null ? c99 : T(p99), p99 is null ? muted : text, rr?.Concorde99 ?? "");
+            CampCell(row, 7, T(p03), p03 is null ? muted : text);
             var cells = new[] { Time(co), Time(ex), R(apex, conc), R(apex, p03), R(apex, p99), R(apex, p98), R(apex, pFirst), VsRef(sc, refv), VsRef(lk, refv) };
-            for (var k = 0; k < cells.Length; ++k) CampCell(row, 7 + k, cells[k].Item1, cells[k].Item2);
+            for (var k = 0; k < cells.Length; ++k) CampCell(row, 8 + k, cells[k].Item1, cells[k].Item2);
             var running = _campaignActive && _current is { } cur && cur.Instance == name;
             var bg = running ? Color.FromArgb(0x40, _pal.Accent.R, _pal.Accent.G, _pal.Accent.B) : _campRows.Children.Count % 2 == 1 ? _pal.Background : Colors.Transparent;
             _campRows.Children.Add(new Border { Child = row, Background = new SolidColorBrush(bg), CornerRadius = new CornerRadius(4) });
