@@ -24,7 +24,7 @@ public sealed record CampaignRun(string Instance, int N, string Solver, double L
 // Same plan as engine/tools/history/run_history.py (both write the same per-run JSON).
 public static class CampaignPlan
 {
-    public const int ExactMaxN = 4000;
+    public const int ExactMaxN = 0;  // 0: APEX exact at every size (scalable vs exact comparison)
     public static readonly string[] Solvers = ["apex_exact", "apex_scalable", "concorde", "lkh"];
 
     public static double TimeBox(int n, bool exact) =>
@@ -50,7 +50,7 @@ public static class CampaignPlan
             from s in Solvers
             where solvers.Contains(s)
             let exact = s is "apex_exact" or "concorde"
-            where s != "apex_exact" || i.N <= ExactMaxN
+            where s != "apex_exact" || i.N <= ExactMaxN || ExactMaxN == 0
             select new CampaignRun(i.Name, i.N, s, TimeBox(i.N, exact))];
 }
 
@@ -98,7 +98,7 @@ public sealed partial class MainWindow
         {
             var baseline = s is "concorde" or "lkh";
             var available = !baseline || (root is not null && File.Exists(Baseline(root, s)));
-            var cb = new CheckBox { Content = labels[s] + (available ? "" : " (not built)"), IsChecked = available && s != "apex_exact", IsEnabled = available, Margin = new Thickness(0, 0, 14, 0) };
+            var cb = new CheckBox { Content = labels[s] + (available ? "" : " (not built)"), IsChecked = available, IsEnabled = available, Margin = new Thickness(0, 0, 14, 0) };
             if (baseline) ToolTip.SetTip(cb, "test-environment baseline (engine/tools/baselines), never part of the product");
             _campSolver[s] = cb;
             solverRow.Children.Add(cb);
@@ -527,9 +527,14 @@ public sealed partial class MainWindow
         ("UB-LB", 62, "APEX exact: (UB - LB) / UB, the gap its own LP bound certifies"),
         ("UB-opt", 62, "APEX exact: (UB - reference) / reference"),
         ("LB-opt", 62, "APEX exact: (reference - LB) / reference"),
+        ("UB-LB", 62, "APEX scalable: (UB - LB) / UB, its own bound (LP root or Lagrangian)"),
+        ("UB-opt", 62, "APEX scalable: (UB - reference) / reference"),
+        ("LB-opt", 62, "APEX scalable: (reference - LB) / reference"),
+        ("UB-LB", 62, "scalable minus exact, certified gap (percentage points; > 0: exact better)"),
+        ("UB-opt", 62, "scalable minus exact, tour vs reference (percentage points; > 0: exact better)"),
     ];
     private static readonly (string Title, int From, int Count)[] CampGroups =
-        [("", 0, 3), ("first proof", 3, 2), ("Concorde, published", 5, 3), ("this machine (exact)", 8, 2), ("APEX exact time ÷ Concorde", 10, 5), ("tour vs reference", 15, 2), ("APEX exact gaps", 17, 3)];
+        [("", 0, 3), ("first proof", 3, 2), ("Concorde, published", 5, 3), ("this machine (exact)", 8, 2), ("APEX exact time ÷ Concorde", 10, 5), ("tour vs reference", 15, 2), ("APEX exact gaps", 17, 3), ("APEX scalable gaps", 20, 3), ("scalable − exact", 23, 2)];
 
     private static Grid CampGrid()
     {
@@ -625,9 +630,13 @@ public sealed partial class MainWindow
             CampCell(row, 5, T(p98), p98 is null ? muted : text, rr?.Abcc98Stated ?? "");
             CampCell(row, 6, rr?.Concorde99 is { Length: > 0 } c99 && p99 is null ? c99 : T(p99), p99 is null ? muted : text, rr?.Concorde99 ?? "");
             CampCell(row, 7, T(p03), p03 is null ? muted : text);
-            double exUb = Num(ex, "ub"), exLb = Num(ex, "lb"), rv = refv > 0 ? refv : double.NaN;
+            double exUb = Num(ex, "ub"), exLb = Num(ex, "lb"), scUb = Num(sc, "ub"), scLb = Num(sc, "lb"), rv = refv > 0 ? refv : double.NaN;
+            double exCert = 100 * (exUb - exLb) / exUb, scCert = 100 * (scUb - scLb) / scUb, exRef = 100 * (exUb - rv) / rv, scRef = 100 * (scUb - rv) / rv;
+            (string, IBrush) Delta(double d) => double.IsNaN(d) ? ("-", muted)
+                : (d.ToString("+0.000;-0.000;0.000", CultureInfo.InvariantCulture), Math.Abs(d) < 5e-4 ? muted : d > 0 ? bad : good);
             var cells = new[] { Time(co), Time(ex), R(apex, conc), R(apex, p03), R(apex, p99), R(apex, p98), R(apex, pFirst), VsRef(sc, refv), VsRef(lk, refv),
-                                Pct(100 * (exUb - exLb) / exUb), Pct(100 * (exUb - rv) / rv), Pct(100 * (rv - exLb) / rv) };
+                                Pct(exCert), Pct(exRef), Pct(100 * (rv - exLb) / rv),
+                                Pct(scCert), Pct(scRef), Pct(100 * (rv - scLb) / rv), Delta(scCert - exCert), Delta(scRef - exRef) };
             for (var k = 0; k < cells.Length; ++k) CampCell(row, 8 + k, cells[k].Item1, cells[k].Item2);
             var running = _campaignActive && _current is { } cur && cur.Instance == name;
             var bg = running ? Color.FromArgb(0x40, _pal.Accent.R, _pal.Accent.G, _pal.Accent.B) : _campRows.Children.Count % 2 == 1 ? _pal.Background : Colors.Transparent;

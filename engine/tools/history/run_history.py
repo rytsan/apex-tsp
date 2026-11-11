@@ -27,7 +27,7 @@ BASE = os.path.join(ROOT, "engine", "tools", "baselines", "run_baseline.py")
 THREADS = 5
 MEM_MB = 4096
 SEED = 1
-EXACT_MAX_N = 4000  # APEX exact only up to this size (the benchmark itself is 10k+: scalable vs Concorde vs LKH-3)
+EXACT_MAX_N = 0     # APEX exact size cap (0 = none: scalable vs exact is compared at every size)
 MIN_N = 10000       # default instance size of the campaign
 
 
@@ -52,7 +52,7 @@ def plan(rows, solvers):
     for r in rows:
         n = int(r["n"])
         for s in solvers:
-            if s == "apex_exact" and n > EXACT_MAX_N:
+            if s == "apex_exact" and EXACT_MAX_N and n > EXACT_MAX_N:
                 continue
             yield r["instance"], n, s, time_box(n, "exact" if s in ("apex_exact", "concorde") else "heur")
 
@@ -89,7 +89,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(ROOT, "out", "history", "final"))
     ap.add_argument("--only", default="")
-    ap.add_argument("--solvers", default="apex_scalable,concorde,lkh")
+    ap.add_argument("--solvers", default="apex_exact,apex_scalable,concorde,lkh")
     ap.add_argument("--min-n", type=int, default=MIN_N)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()

@@ -177,8 +177,8 @@ def main():
              f"| OS | {meta.get('os', '-')} |", f"| APEX | {meta.get('threads_apex', 5)} threads, `--mem-limit-mb {meta.get('mem_limit_mb', 4096)}`, seed {meta.get('seed', 1)} |",
              "| Concorde / LKH-3 | 1 thread, seed 1; test environment only (not part of the product) |",
              f"| baselines | {(meta.get('baselines') or '-').strip().replace(chr(10), '; ')} |", "",
-             f"Time boxes per run: {meta.get('time_boxes', OLD_TIME_BOXES)}. APEX exact only up to "
-             f"{meta.get('exact_max_n', 4000)} nodes. APEX scalable always uses its whole time box; LKH-3 stops at its own trial limit.", "",
+             f"Time boxes per run: {meta.get('time_boxes', OLD_TIME_BOXES)}. APEX exact size cap: "
+             f"{meta.get('exact_max_n', 4000) or 'none'}. APEX scalable always uses its whole time box; LKH-3 stops at its own trial limit.", "",
              "## Summary", "", "| solver | runs | proven optimal | at the reference value | median gap vs reference |", "|---|---|---|---|---|"]
     for s in SOLVERS:
         nr, pr, at, med = stats(s)
@@ -204,6 +204,21 @@ def main():
                 lines.append(f"| {d['instance']} | {d['n']} | {d['reference']} | {NAMES[s]} | {run.get('status')} | {fnum(run.get('ub'), '{}')} | "
                              f"{fnum(run.get('lb'), '{}')} | {fnum(gap_cert(run), '{:.4f}')} | {fnum(gap_ref(run, d['reference']), '{:+.4f}')} | "
                              f"{fnum(gap_lb_ref(run, d['reference']), '{:.4f}')} | {fnum(run.get('wall_s'))} |")
+    lines += ["", "## APEX scalable vs exact", "",
+              "Same metrics for both modes on the same time box; deltas are scalable minus exact in percentage points "
+              "(> 0: the exact mode is better).", "",
+              "| instance | n | exact UB-LB % | scalable UB-LB % | delta | exact UB-ref % | scalable UB-ref % | delta | exact LB-ref % | scalable LB-ref % | delta | exact s | scalable s |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    def dlt(a, b):
+        return None if a is None or b is None else b - a
+    for d in data:
+        ex, sc = d["runs"].get("apex_exact"), d["runs"].get("apex_scalable")
+        if not (ex and sc):
+            continue
+        ref_v = d["reference"]
+        g = [(gap_cert(ex), gap_cert(sc)), (gap_ref(ex, ref_v), gap_ref(sc, ref_v)), (gap_lb_ref(ex, ref_v), gap_lb_ref(sc, ref_v))]
+        cells = " | ".join(f"{fnum(a, '{:.4f}')} | {fnum(b, '{:.4f}')} | {fnum(dlt(a, b), '{:+.4f}')}" for a, b in g)
+        lines.append(f"| {d['instance']} | {d['n']} | {cells} | {fnum(ex.get('wall_s'))} | {fnum(sc.get('wall_s'))} |")
     lines += ["", "## Milestones: then and now", "",
               "| year | team | instance | n | first solution CPU (published) | Concorde 1998 paper | Concorde 1999 | Concorde here | APEX here |", "|---|---|---|---|---|---|---|---|---|"]
     for r in sorted((r for r in ref.values() if r["year_solved"]), key=lambda r: int(r["year_solved"])):
