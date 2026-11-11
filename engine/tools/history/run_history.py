@@ -38,7 +38,13 @@ def time_box(n, kind):
 
 
 TIME_BOXES = ("exact (APEX exact, Concorde): 60 s below 200 nodes, 300 s below 1000, 600 s above; "
-              "heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s above")
+              "heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s above; "
+              "APEX (exact and scalable) polishes at most 120 s (half the box when smaller), then the LP gets the rest")
+
+
+def polish_box(box):
+    """APEX exact: ILS polish budget inside the time box; the LP / branch-and-cut gets the rest."""
+    return min(120, box / 2)
 
 
 def plan(rows, solvers):
@@ -54,6 +60,8 @@ def run_apex(inst, mode, limit, out_base):
     report, tour, log = out_base + ".report.json", out_base + ".tour", out_base + ".log"
     cmd = [APEX, "--instance", inst, "--mode", mode, "--time-limit", str(limit), "--threads", str(THREADS),
            "--mem-limit-mb", str(MEM_MB), "--seed", str(SEED), "--report", report, "--out", tour]
+    if mode == "exact":
+        cmd += ["--polish-time-limit", str(polish_box(limit))]
     with open(log, "w") as f:
         rc = subprocess.call(cmd, stdout=f, stderr=subprocess.STDOUT)
     r = json.load(open(report)) if os.path.exists(report) else {"status": f"EXIT_{rc}"}
@@ -61,6 +69,7 @@ def run_apex(inst, mode, limit, out_base):
     return {"solver": "apex_" + mode, "status": r.get("status"), "ub": r.get("ub"), "lb": r.get("lb"),
             "lb_source": r.get("lb_source"), "wall_s": r.get("wall_s"), "ram_peak_bytes": r.get("ram_peak_bytes"),
             "threads": THREADS, "seed": SEED, "time_limit_s": limit, "exit_code": rc,
+            "polish_time_limit_s": polish_box(limit) if mode == "exact" else None,
             "iterations": r.get("iterations"), "cuts_by_family": r.get("cuts_by_family")}
 
 

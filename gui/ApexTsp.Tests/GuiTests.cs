@@ -194,6 +194,27 @@ public class RenderTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void T_forest_draws_one_cycle_per_cluster()
+    {
+        var s = Synthetic(1000, 3);
+        // two clusters: nodes 0..499 and 500..999, each closed and followed by a separator
+        var f = new List<uint>();
+        for (uint c = 0; c < 2; ++c)
+        {
+            for (uint v = 0; v < 500; ++v) f.Add(c * 500 + v);
+            f.Add(c * 500);
+            f.Add(uint.MaxValue);
+        }
+        s.SetTour([.. f], f.Count);
+        Assert.True(s.IsForest);
+        using var surface = SKSurface.Create(new SKImageInfo(800, 600, SKColorType.Bgra8888, SKAlphaType.Premul));
+        var st = new TourRenderer().Render(surface.Canvas, s, Viewport.Fit(s, 800, 600));
+        Assert.Equal(1000, st.Segments);  // 500 edges per closed cycle, no edge between the clusters
+        s.SetTour([.. Enumerable.Range(0, 1000).Select(i => (uint)i)], 1000);
+        Assert.False(s.IsForest);
+    }
+
+    [Fact]
     public void T_lod_path_executes()
     {
         var s = Synthetic(100_000, 5);
@@ -378,6 +399,23 @@ public class AppModelTests
         Assert.Empty(s.Added);
         s.ClearDiff();
         Assert.Empty(s.Removed);
+    }
+
+    [Fact]
+    public void T_baseline_log_bounds()
+    {
+        Assert.Equal(126713, BaselineLog.Parse("concorde", "Set initial upperbound to 126713 (from tour)")!.Value.Ub);
+        var f = BaselineLog.Parse("concorde", "Final lower bound 126643.000000, upper bound 126713.000000")!.Value;
+        Assert.Equal((126713.0, 126643.0), (f.Ub, f.Lb));
+        Assert.Equal(126643, BaselineLog.Parse("concorde", "LOWER BOUND: 126643.000000   ACTIVE NODES: 2")!.Value.Lb);
+        Assert.Equal(126643, BaselineLog.Parse("concorde", "TOUR FOUND - upperbound is 126643.00")!.Value.Ub);
+        Assert.Equal(126643, BaselineLog.Parse("concorde", "Optimal Solution: 126643.00")!.Value.Lb);
+        Assert.True(double.IsNaN(BaselineLog.Parse("concorde", "  LP Value  3: 125910.227989  (0.47 seconds)")!.Value.Lb));
+        Assert.Equal(28392, BaselineLog.Parse("lkh", "* 1659: Cost = 28392, Time = 216.14 sec. ")!.Value.Ub);
+        var l = BaselineLog.Parse("lkh", "Lower bound = 6074.6, Ascent time = 0.02 sec.")!.Value;
+        Assert.True(l.LbLagrangian);
+        Assert.Equal(6074.6, l.Lb);
+        Assert.Null(BaselineLog.Parse("lkh", "MAX_TRIALS = 10150"));
     }
 
     [Fact]

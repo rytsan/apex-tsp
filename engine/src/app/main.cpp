@@ -97,7 +97,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         apex::ipc::ServerConfig sc;
         sc.endpoint = opt.ipc;
         sc.shared_tour_path = opt.shared_tour.empty() ? default_shared_tour(opt.ipc) : opt.shared_tour;
-        sc.tour_capacity = inst.n;
+        sc.tour_capacity = 2 * inst.n;  // room for a cluster forest (cycles + separators, see on_forest)
         sc.hello.mode = opt.mode == "exact" ? 0 : opt.mode == "scalable" ? 1 : 2;  // 2 = lab
         sc.hello.mem_limit_mb = static_cast<uint32_t>(opt.mem_limit_mb);
         sc.hello.threads = opt.threads;
@@ -183,6 +183,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
     apex::Tour best = tour;
     std::string status = "done";
     std::optional<int64_t> lb;
+    bool lb_from_lp = opt.mode == "exact";
     apex::BnCResult bnc_result;
     bool ran_bnc = false;
     try {
@@ -267,7 +268,25 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         dc.leaf.exact_limit = opt.leaf_exact_limit;
         dc.leaf.threads = opt.threads;
         dc.leaf.seed = rng();
+        auto forest_sent = Clock::now() - std::chrono::seconds(1);
         if (ipc && opt.mode == "scalable") {
+            // GUI animation: every cluster cycle closed (first node repeated) and followed by a
+            // separator id >= n, so the map draws one colored cycle per cluster (~10 frames / s).
+            dc.on_forest = [&](const std::vector<std::vector<uint32_t>>& forest) {
+                size_t live = 0;
+                for (const auto& c : forest) live += !c.empty();
+                const auto now = Clock::now();
+                if (live > 1 && now - forest_sent < std::chrono::milliseconds(100)) return;
+                forest_sent = now;
+                apex::Tour f;
+                for (const auto& c : forest) {
+                    if (c.empty()) continue;
+                    f.order.insert(f.order.end(), c.begin(), c.end());
+                    f.order.push_back(c.front());
+                    f.order.push_back(UINT32_MAX);
+                }
+                ipc->publish_tour(f, true);
+            };
             dc.leaf.on_cluster = [&](uint32_t id, uint8_t s) { ipc->cluster_state(id, s); };
             dc.leaf.on_cluster_box = [&](uint32_t id, double x0, double y0, double x1, double y1) {
                 tel.event("cluster_box", {{"id", std::to_string(id)}, {"x0", fmt(x0, 1)}, {"y0", fmt(y0, 1)},
@@ -328,15 +347,45 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
     // whose tour is the UB the branch-and-cut starts from.
     const bool exact = opt.mode == "exact";
     const double left = opt.time_limit_s > 0 ? opt.time_limit_s - prior_wall - since(t0) : 0;
-    if (exact || left > 0) {
+    if (exact || left > 0 || opt.polish_time_limit_s > 0) {
         phase("polish", tour, rng);
         apex::PolishConfig pc;
         pc.threads = opt.threads;
         pc.seed = rng();
-        if (left > 0) pc.time_limit_s = exact ? 0.1 * left : left;
-        if (exact) pc.stall_per_node = 50;  // warm-up ends when the ILS stops improving
+        // Both modes: polish, then the LP gets the rest of --time-limit. Default polish budget:
+        // 120 s, at most half of what is left; --polish-time-limit overrides it.
+        if (left > 0) pc.time_limit_s = std::min(120.0, 0.5 * left);
+        if (opt.polish_time_limit_s > 0)
+            pc.time_limit_s = left > 0 ? std::min(opt.polish_time_limit_s, left) : opt.polish_time_limit_s;
+        if (exact) pc.stall_per_node = 50;  // exact: warm-up ends early when the ILS stops improving
         if (ipc) pc.on_tour = on_tour;
+        // GUI: one moving box per ILS worker around the node it kicks (cluster ids from kWorkBox,
+        // above the decomposition leaves), at most ~6 updates per second per worker.
+        constexpr uint32_t kWorkBox = 4096;
+        std::mutex work_mu;
+        std::vector<Clock::time_point> work_sent;
+        double half = 0;
+        if (ipc && inst.n > 0) {
+            const auto [x0, x1] = std::minmax_element(inst.xs.begin(), inst.xs.end());
+            const auto [y0, y1] = std::minmax_element(inst.ys.begin(), inst.ys.end());
+            half = 0.03 * std::max(*x1 - *x0, *y1 - *y0);
+            pc.on_work = [&](uint32_t w, uint32_t v) {
+                const auto now = Clock::now();
+                std::lock_guard<std::mutex> lk(work_mu);
+                if (w >= work_sent.size()) work_sent.resize(w + 1);
+                if (now - work_sent[w] < std::chrono::milliseconds(150)) return;
+                work_sent[w] = now;
+                tel.event("cluster_box", {{"id", std::to_string(kWorkBox + w)}, {"x0", fmt(inst.xs[v] - half, 1)},
+                                          {"y0", fmt(inst.ys[v] - half, 1)}, {"x1", fmt(inst.xs[v] + half, 1)},
+                                          {"y1", fmt(inst.ys[v] + half, 1)}});
+                ipc->cluster_state(kWorkBox + w, 1);
+            };
+        }
         const auto ps = apex::polish_tour(tour, inst, g, pc);
+        if (!work_sent.empty()) {
+            for (uint32_t w = 0; w < work_sent.size(); ++w) ipc->cluster_state(kWorkBox + w, 0);
+            ipc->flush_clusters(true);
+        }
         tel.event("polish", {{"heuristic", "true"}, {"ub", std::to_string(tour.cost)}, {"start", std::to_string(ps.start_cost)},
                              {"parallel", ps.parallel ? "true" : "false"}, {"segments", std::to_string(ps.segments)},
                              {"rounds", std::to_string(ps.rounds)}, {"iterations", std::to_string(ps.iterations)},
@@ -344,6 +393,47 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         best = tour;
         count_ub(tour.cost);
         apex::check_memory(mem_limit, "polish");
+    }
+
+    // Scalable: root LP (cut loop + pricing, no branching) with the time left, from the polished
+    // UB, while a background ILS keeps improving the tour. LB = max(Lagrangian, LP bound).
+    const double lp_left = opt.time_limit_s > 0 ? opt.time_limit_s - prior_wall - since(t0) : 0;
+    if (opt.mode == "scalable" && lp_left > 1 && !apex::cancel_requested()) {
+        phase("bnc", tour, rng);
+        const uint32_t added = apex::add_tour_edges(g, inst, tour);
+        apex::RootLoopConfig rc;
+        rc.time_limit_s = lp_left;
+        rc.lp.time_limit_s = lp_left;
+        rc.ub = tour.cost;
+        rc.dp.threads = opt.threads;
+        std::unique_ptr<apex::BackgroundIls> bg;
+        if (opt.threads > 1) {
+            apex::IlsConfig ic;
+            ic.seed = rng();
+            bg = std::make_unique<apex::BackgroundIls>(inst, g, tour, ic);
+        }
+        tel.event("root_lp_start", {{"ub", std::to_string(tour.cost)}, {"tour_edges_added", std::to_string(added)},
+                                    {"edges", std::to_string(g.edges.size())}, {"background_ils", bg ? "true" : "false"},
+                                    {"time_s", fmt(lp_left, 1)}});
+        try {
+            const auto r = apex::run_root_loop(inst, g, rc, &tel);
+            if (std::isfinite(r.global_lb) && (!lb || r.global_lb_int > *lb)) {
+                lb = std::min<int64_t>(r.global_lb_int, tour.cost);
+                lb_from_lp = true;
+            }
+        } catch (const std::exception& e) {  // the LP does not fit the memory cap: keep the Lagrangian LB
+            if (!dynamic_cast<const std::bad_alloc*>(&e) && !dynamic_cast<const apex::MemLimitExceeded*>(&e)) throw;
+            tel.event("root_lp_skipped", {{"cause", "memory"}, {"msg", e.what()}});
+        }
+        if (bg) {
+            bg->stop();
+            apex::Tour better;
+            if (bg->take_if_better(tour.cost, better)) {
+                tour = std::move(better);
+                count_ub(tour.cost);
+            }
+        }
+        best = tour;
     }
 
     if (exact) {  // branch-and-cut from the heuristic UB (Sprint 3 + M4.7 hand-off)
@@ -439,7 +529,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         rep.cuts_component = bnc_result.cuts_component;
         rep.verification_rounds = bnc_result.verification_pricing_calls;
     }
-    const char* lb_source = opt.mode == "exact" ? "lp" : "lagrangian";
+    const char* lb_source = lb_from_lp ? "lp" : "lagrangian";
     if (lb) {
         rep.lb = *lb;
         rep.lb_source = lb_source;

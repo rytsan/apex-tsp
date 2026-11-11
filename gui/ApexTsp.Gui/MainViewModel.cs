@@ -202,6 +202,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
         Changed();
     }
 
+    // Campaign baselines (Concorde, LKH-3): bounds from their log lines; best UB, best LB kept.
+    public void OnBaselineUpdate(double seconds, BaselineUpdate u)
+    {
+        if (!double.IsNaN(u.Ub)) UpperBound = double.IsNaN(UpperBound) ? u.Ub : Math.Min(UpperBound, u.Ub);
+        if (!double.IsNaN(u.Lb)) LowerBound = double.IsNaN(LowerBound) ? u.Lb : Math.Max(LowerBound, u.Lb);
+        GapPct = double.IsNaN(UpperBound) || double.IsNaN(LowerBound) ? double.NaN : 100 * (UpperBound - LowerBound) / UpperBound;
+        LbSource = double.IsNaN(LowerBound) ? "-" : u.LbLagrangian ? "lagrangian" : "lp";
+        Phase = u.Phase;
+        Status = "running";
+        if (!double.IsNaN(u.Ub) || !double.IsNaN(u.Lb))
+        {
+            _history.Add(new BoundSample(seconds, UpperBound, LowerBound, GapPct));
+            if (_history.Count > HistoryCapacity) _history.RemoveRange(0, _history.Count - HistoryCapacity);
+            HistoryChanged?.Invoke();
+        }
+        Changed();
+    }
+
     // New run: clear everything from the previous one.
     public void Reset()
     {

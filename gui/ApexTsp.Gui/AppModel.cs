@@ -11,6 +11,7 @@ public sealed class RunSettings
 {
     public string Mode { get; set; } = "exact";        // exact | scalable
     public double TimeLimitS { get; set; } = 600;
+    public double PolishTimeLimitS { get; set; }        // 0: engine default (exact 10% of the run)
     public int Threads { get; set; } = Math.Max(1, Environment.ProcessorCount / 2);
     public ulong Seed { get; set; } = 1;
     public int MemLimitMb { get; set; } = 4096;
@@ -24,6 +25,7 @@ public sealed class RunSettings
     {
         if (!Modes.Contains(Mode) && Mode != "lab") return "mode must be exact or scalable";
         if (!(TimeLimitS > 0)) return "time limit must be > 0 s";
+        if (!(PolishTimeLimitS >= 0) || PolishTimeLimitS >= TimeLimitS) return "polish limit must be 0 (auto) or below the time limit";
         if (Threads < 1 || Threads > 256) return "threads must be 1..256";
         if (MemLimitMb < 64) return "memory ceiling must be >= 64 MB";
         if (Resume && CheckpointDir.Length == 0) return "resume needs a checkpoint directory";
@@ -42,6 +44,7 @@ public sealed class RunSettings
             "--mem-limit-mb", MemLimitMb.ToString(CultureInfo.InvariantCulture),
             "--ipc", endpoint, "--shared-tour", sharedTour, "--report", reportPath, "--out", tourPath,
         };
+        if (PolishTimeLimitS > 0) a.AddRange(["--polish-time-limit", PolishTimeLimitS.ToString("0.###", CultureInfo.InvariantCulture)]);
         if (CheckpointDir.Length > 0) a.AddRange(["--checkpoint", CheckpointDir]);
         if (Resume) a.Add("--resume");
         return a;
@@ -317,5 +320,54 @@ public static class ReferenceTable
         }
         f.Add(sb.ToString());
         return [.. f];
+    }
+}
+
+// Live bounds of the test-environment baselines (campaign), parsed from their log lines.
+// Concorde: initial / new upper bounds, LP bounds of the search, branch-and-cut tasks.
+// LKH-3: Held-Karp ascent lower bound (Lagrangian) and every improved tour of the trials.
+public readonly record struct BaselineUpdate(double Ub, double Lb, string Phase, bool LbLagrangian);
+
+public static partial class BaselineLog
+{
+    private static double D(string s) => double.Parse(s, CultureInfo.InvariantCulture);
+
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Set initial upperbound to ([\d.]+)|upperbound is ([\d.]+)|^New upperbound[^:]*: ([\d.]+)")]
+    private static partial System.Text.RegularExpressions.Regex ConcordeUb();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^(?:New lower bound|Exact lower bound|LOWER BOUND):\s*([\d.]+)")]
+    private static partial System.Text.RegularExpressions.Regex ConcordeLb();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Final lower bound ([\d.]+), upper bound ([\d.]+)")]
+    private static partial System.Text.RegularExpressions.Regex ConcordeFinal();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Optimal Solution: ([\d.]+)")]
+    private static partial System.Text.RegularExpressions.Regex ConcordeOpt();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\s*LP Value\s+(\d+): ([\d.]+)")]
+    private static partial System.Text.RegularExpressions.Regex ConcordeLp();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Task \d+: (Branching|Cutting) on node (\d+)")]
+    private static partial System.Text.RegularExpressions.Regex ConcordeTask();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^\*\s*(\d+): Cost = (\d+)|^Run (\d+): Cost = (\d+)")]
+    private static partial System.Text.RegularExpressions.Regex LkhCost();
+    [System.Text.RegularExpressions.GeneratedRegex(@"^Lower bound = ([\d.]+)")]
+    private static partial System.Text.RegularExpressions.Regex LkhLb();
+
+    // Null when the line carries no bound or phase. NaN = bound not in this line.
+    public static BaselineUpdate? Parse(string solver, string line)
+    {
+        const double nan = double.NaN;
+        if (solver == "lkh")
+        {
+            if (LkhLb().Match(line) is { Success: true } l) return new(nan, D(l.Groups[1].Value), "LKH-3 ascent", true);
+            if (LkhCost().Match(line) is { Success: true } c)
+                return c.Groups[2].Success ? new(D(c.Groups[2].Value), nan, $"LKH-3 trial {c.Groups[1].Value}", true)
+                                           : new(D(c.Groups[4].Value), nan, $"LKH-3 run {c.Groups[3].Value}", true);
+            return null;
+        }
+        if (ConcordeFinal().Match(line) is { Success: true } f) return new(D(f.Groups[2].Value), D(f.Groups[1].Value), "Concorde root done", false);
+        if (ConcordeOpt().Match(line) is { Success: true } o) return new(D(o.Groups[1].Value), D(o.Groups[1].Value), "Concorde optimal", false);
+        if (ConcordeLb().Match(line) is { Success: true } b) return new(nan, D(b.Groups[1].Value), "Concorde branch-and-cut", false);
+        if (ConcordeUb().Match(line) is { Success: true } u)
+            return new(D(u.Groups[1].Success ? u.Groups[1].Value : u.Groups[2].Success ? u.Groups[2].Value : u.Groups[3].Value), nan, "Concorde", false);
+        if (ConcordeLp().Match(line) is { Success: true } p) return new(nan, nan, $"Concorde root LP round {p.Groups[1].Value}: {p.Groups[2].Value}", false);
+        if (ConcordeTask().Match(line) is { Success: true } t) return new(nan, nan, $"Concorde {t.Groups[1].Value.ToLowerInvariant()} node {t.Groups[2].Value}", false);
+        return null;
     }
 }

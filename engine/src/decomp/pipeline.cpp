@@ -54,7 +54,7 @@ Tour construct_tour(const Instance& inst, const CandidateGraph& g, const DecompC
     Tour t;
     if (inst.n > 2 * cfg.max_leaf) {
         st.decomposed = true;
-        t = decompose_and_patch(inst, g, cfg, &st.decomp);
+        t = cfg.kway ? cluster_merge(inst, g, cfg, &st.decomp) : decompose_and_patch(inst, g, cfg, &st.decomp);
     } else {
         t = lp_guided_tour(inst, g, {});  // greedy edge + 2-opt / Or-opt
     }
@@ -82,6 +82,7 @@ PolishStats polish_tour(Tour& tour, const Instance& inst, const CandidateGraph& 
             ic.max_stall = cfg.stall_per_node * n;
             if (timed) ic.time_limit_s = cfg.time_limit_s;
             else ic.max_iterations = cfg.iterations_per_node * n * rounds;
+            if (cfg.on_work) ic.on_kick = [&cfg, r](uint32_t v) { cfg.on_work(static_cast<uint32_t>(r), v); };
             iters[r] = iterated_local_search(runs[r], inst, g, ic, nullptr,
                                              r == 0 ? cfg.on_tour : std::function<void(const Tour&)>{}).iterations;
         });
@@ -121,6 +122,7 @@ PolishStats polish_tour(Tour& tour, const Instance& inst, const CandidateGraph& 
                 ic.fixed_v = 0;
                 if (timed) ic.time_limit_s = seg_s;
                 else ic.max_iterations = cfg.iterations_per_node * m;
+                if (cfg.on_work) ic.on_kick = [&cfg, &ids, s](uint32_t v) { cfg.on_work(static_cast<uint32_t>(s), ids[v]); };
                 iters[s] += iterated_local_search(p, sub, sg, ic).iterations;
                 // Rotate the cycle back into the path 0 .. m-1 and write it in place.
                 uint32_t z = 0;

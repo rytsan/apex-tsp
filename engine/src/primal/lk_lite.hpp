@@ -27,6 +27,7 @@ struct IlsConfig {
     // boundary nodes after a cluster merge; fixed edge (fixed_u, fixed_v) is never removed.
     std::vector<uint32_t> focus;
     uint32_t fixed_u = UINT32_MAX, fixed_v = UINT32_MAX;
+    std::function<void(uint32_t)> on_kick;  // GUI: tour node where each kick starts (observation only)
 };
 
 struct IlsStats {

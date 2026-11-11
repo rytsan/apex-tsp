@@ -5,6 +5,7 @@
 // directive 5). Telemetry phase: "decomposition (heuristic)".
 
 #include <cstdint>
+#include <functional>
 #include <vector>
 
 #include "core/instance.hpp"
@@ -28,6 +29,14 @@ struct DecompConfig {
     // Re-evaluation after each merge (M4.7): ILS on the merged cluster, kicks at the stitch and
     // boundary nodes, iterations = this * number of focus nodes (0 = off).
     uint32_t merge_iterations_per_focus = 5;
+    // k-way merging (default): rounds over a minimum spanning tree (Prim) of the clusters, groups
+    // of 2 (dense) up to max_group (sparse) clusters merged per round in parallel. false: the
+    // binary bottom-up merge of the density tree (M4.7).
+    bool kway = true;
+    uint32_t max_group = 4;
+    // Current cycles (every finished leaf / merged group so far), for the GUI; called under a
+    // lock from worker threads, observation only.
+    std::function<void(const std::vector<std::vector<uint32_t>>&)> on_forest;
 };
 
 struct DecompStats {
@@ -60,5 +69,13 @@ int64_t reevaluate_cycle(const Instance& inst, std::vector<uint32_t>& cycle, con
 // any thread count.
 Tour decompose_and_patch(const Instance& inst, const CandidateGraph& g, const DecompConfig& cfg,
                          DecompStats* stats = nullptr);
+// heuristic: density-tree leaves solved in parallel, then merge rounds until one cycle: Prim's
+// minimum spanning tree over the clusters (weight: cheapest candidate edge between two clusters)
+// picks the neighbours; groups grow along its edges, cheapest first, up to 2 clusters where the
+// points are dense and up to max_group where they are sparse (points per bounding-box area vs
+// the median). A group is stitched one cluster at a time with the cheapest 2-edge exchange over
+// the candidate edges between them, then re-evaluated by ILS around the stitches. Groups of a
+// round run in parallel; deterministic for any thread count.
+Tour cluster_merge(const Instance& inst, const CandidateGraph& g, const DecompConfig& cfg, DecompStats* stats = nullptr);
 
 }  // namespace apex

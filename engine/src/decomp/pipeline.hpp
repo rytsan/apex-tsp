@@ -38,6 +38,8 @@ struct PolishConfig {
     // Best tour so far (GUI / app checkpoint, M5.2): whole-tour mode passes it to the first ILS
     // as on_best (throttled), parallel mode calls it after every round. Observation only.
     std::function<void(const Tour&)> on_tour;
+    // GUI: (worker, node) where an ILS worker kicks next; worker = thread (whole tour) or segment.
+    std::function<void(uint32_t, uint32_t)> on_work;
 };
 
 struct PolishStats {

@@ -47,6 +47,7 @@ public sealed partial class MainWindow : Window
     // settings card
     private readonly ComboBox _mode = new() { ItemsSource = RunSettings.Modes, MinWidth = 140 };
     private readonly NumericUpDown _time = new() { Minimum = 1, Maximum = 86400 * 7, Increment = 60, FormatString = "0", MinWidth = 140 };
+    private readonly NumericUpDown _polish = new() { Minimum = 0, Maximum = 86400 * 7, Increment = 10, FormatString = "0", MinWidth = 140 };
     private readonly NumericUpDown _threads = new() { Minimum = 1, Maximum = 256, Increment = 1, FormatString = "0", MinWidth = 140 };
     private readonly NumericUpDown _seed = new() { Minimum = 0, Maximum = uint.MaxValue, Increment = 1, FormatString = "0", MinWidth = 140 };
     private readonly NumericUpDown _mem = new() { Minimum = 64, Maximum = 1 << 20, Increment = 512, FormatString = "0", MinWidth = 140 };
@@ -192,11 +193,13 @@ public sealed partial class MainWindow : Window
         ckRow.Children.AddRange([browse, _ckDir]);
         Row(0, "mode", _mode);
         Row(1, "time limit (s)", _time);
-        Row(2, "threads", _threads);
-        Row(3, "seed", _seed);
-        Row(4, "memory ceiling (MB)", _mem);
-        Row(5, "checkpoint dir", ckRow);
-        Row(6, "", _resume);
+        Row(2, "polish limit (s)", _polish);
+        ToolTip.SetTip(_polish, "ILS polish budget before the LP / branch-and-cut; 0 = auto (exact: 10% of the time limit, scalable: all of it)");
+        Row(3, "threads", _threads);
+        Row(4, "seed", _seed);
+        Row(5, "memory ceiling (MB)", _mem);
+        Row(6, "checkpoint dir", ckRow);
+        Row(7, "", _resume);
         var buttons = new WrapPanel();
         side.Children.AddRange([
             Card("Instance", new StackPanel { Spacing = 4, Children = { _instTitle, _instDetails } }),
@@ -453,6 +456,7 @@ public sealed partial class MainWindow : Window
     {
         _mode.SelectedItem = RunSettings.Modes.Contains(s.Mode) ? s.Mode : "exact";
         _time.Value = (decimal)s.TimeLimitS;
+        _polish.Value = (decimal)s.PolishTimeLimitS;
         _threads.Value = s.Threads;
         _seed.Value = s.Seed;
         _mem.Value = s.MemLimitMb;
@@ -464,6 +468,7 @@ public sealed partial class MainWindow : Window
     {
         Mode = _mode.SelectedItem as string ?? "exact",
         TimeLimitS = (double)(_time.Value ?? 600),
+        PolishTimeLimitS = (double)(_polish.Value ?? 0),
         Threads = (int)(_threads.Value ?? 1),
         Seed = (ulong)(_seed.Value ?? 1),
         MemLimitMb = (int)(_mem.Value ?? 4096),
@@ -482,6 +487,7 @@ public sealed partial class MainWindow : Window
             {
                 case "--mode": s.Mode = v; break;
                 case "--time-limit": s.TimeLimitS = double.Parse(v, CultureInfo.InvariantCulture); break;
+                case "--polish-time-limit": s.PolishTimeLimitS = double.Parse(v, CultureInfo.InvariantCulture); break;
                 case "--threads": s.Threads = int.Parse(v, CultureInfo.InvariantCulture); break;
                 case "--seed": s.Seed = ulong.Parse(v, CultureInfo.InvariantCulture); break;
                 case "--mem-limit-mb": s.MemLimitMb = int.Parse(v, CultureInfo.InvariantCulture); break;
@@ -641,8 +647,8 @@ public sealed partial class MainWindow : Window
         Dispatcher.UIThread.Post(() =>
         {
             if (_run != s || _map.Scene is null) return;
-            OnTourRead(buf, count);
             _map.Scene.SetTour(buf, count);
+            if (!_map.Scene.IsForest) OnTourRead(buf, count);
             InvalidateMaps();
         });
     }
@@ -753,6 +759,7 @@ public sealed partial class MainWindow : Window
     public void SaveTour(string path)
     {
         var s = _map.Scene!;
+        if (s.IsForest) { Toast("no tour yet: the clusters are still being merged"); return; }
         TourFiles.Write(path, _inst!.Name, s.Tour.AsSpan(0, s.TourCount), $"apex_tsp {_vm.Status} ub {MainViewModel.Fmt(_vm.UpperBound)}");
         Toast("tour saved: " + path);
     }
@@ -777,7 +784,7 @@ public sealed partial class MainWindow : Window
         Item("Map as PNG", "png", "PNG image", _map.SavePng);
         Item("Tour as SVG", "svg", "SVG image", p =>
         {
-            if (_map.Scene is { } s) TourFiles.WriteSvg(p, s, s.Tour.AsSpan(0, s.TourCount), _pal.MapTour.ToString());
+            if (_map.Scene is { IsForest: false } s) TourFiles.WriteSvg(p, s, s.Tour.AsSpan(0, s.TourCount), _pal.MapTour.ToString());
         });
         Item("Run report (JSON)", "json", "JSON", p => File.WriteAllText(p, _vm.ReportJson));
         menu.ShowAt(this, true);

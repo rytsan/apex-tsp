@@ -17,7 +17,8 @@ struct CliError : std::runtime_error {
 struct Options {
     std::string instance;
     std::string mode = "scalable";  // exact | scalable | lab (heuristics lab, M6.4)
-    double time_limit_s = 0;        // 0 = unlimited
+    double time_limit_s = 0;        // 0 = unlimited (whole run: heuristics + LP / branch-and-cut)
+    double polish_time_limit_s = 0; // ILS polish budget; 0 = default (exact: 10% of the run, scalable: the rest)
     uint64_t mem_limit_mb = 4096;   // enforced from Sprint 4 (MASTER §2.3)
     uint32_t threads = 1;
     uint64_t seed = 1;
@@ -34,7 +35,7 @@ struct Options {
 };
 
 inline constexpr const char* kUsage =
-    "usage: apex_tsp --instance <file.tsp> [--mode exact|scalable|lab] [--time-limit <s>]\n"
+    "usage: apex_tsp --instance <file.tsp> [--mode exact|scalable|lab] [--time-limit <s>] [--polish-time-limit <s>]\n"
     "                [--mem-limit-mb <n>] [--threads <n>] [--seed <n>] [--knn <n>]\n"
     "                [--out <route.tour>] [--checkpoint <dir>] [--resume] [--report <report.json>]\n"
     "                [--leaf-size <n>] [--leaf-exact-limit <n>] [--ipc <endpoint>] [--shared-tour <file>]\n"
@@ -64,6 +65,7 @@ inline Options parse_cli(const std::vector<std::string>& args) {
         if (f == "--instance") o.instance = value();
         else if (f == "--mode") o.mode = value();
         else if (f == "--time-limit") o.time_limit_s = number<double>(f, value());
+        else if (f == "--polish-time-limit") o.polish_time_limit_s = number<double>(f, value());
         else if (f == "--mem-limit-mb") o.mem_limit_mb = number<uint64_t>(f, value());
         else if (f == "--threads") o.threads = number<uint32_t>(f, value());
         else if (f == "--seed") o.seed = number<uint64_t>(f, value());
@@ -83,6 +85,7 @@ inline Options parse_cli(const std::vector<std::string>& args) {
     if (o.mode != "exact" && o.mode != "scalable" && o.mode != "lab") throw CliError("--mode must be exact, scalable or lab");
     if (!o.lab.empty() && o.mode != "lab") throw CliError("--lab needs --mode lab");
     if (o.time_limit_s < 0) throw CliError("--time-limit must be >= 0");
+    if (o.polish_time_limit_s < 0) throw CliError("--polish-time-limit must be >= 0");
     if (o.threads == 0) throw CliError("--threads must be >= 1");
     if (o.knn == 0) throw CliError("--knn must be >= 1");
     if (o.leaf_size < 8) throw CliError("--leaf-size must be >= 8");

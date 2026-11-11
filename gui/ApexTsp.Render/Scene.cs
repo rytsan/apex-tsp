@@ -127,10 +127,17 @@ public sealed class Scene
     }
 
     // tour: node indices (count valid entries); indices >= Count are ignored when drawing.
+    // Forest: the engine's cluster cycles during construction, each closed and followed by an id
+    // >= Count; drawn one color per cycle, never a tour (not saved, measured or diffed).
+    public bool IsForest { get; private set; }
+
     public void SetTour(uint[] tour, int count)
     {
         Tour = tour;
         TourCount = count;
+        var forest = false;
+        for (var i = 0; i < Math.Min(count, tour.Length) && !forest; ++i) forest = tour[i] >= Count;
+        IsForest = forest;
     }
 
     public void SetCluster(uint id, float x0, float y0, float x1, float y1)

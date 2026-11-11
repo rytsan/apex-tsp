@@ -81,6 +81,7 @@ std::vector<std::vector<uint32_t>> solve_leaves(const Instance& inst, const std:
             if (cfg.on_cluster) cfg.on_cluster(static_cast<uint32_t>(leaves[i]), 1);
             auto local = solve_leaf(sub_instance(inst, ids), cfg, mix(cfg.seed ^ mix(i)), &ex, &pr);
             for (auto& v : local) v = ids[v];
+            if (cfg.on_leaf) cfg.on_leaf(static_cast<uint32_t>(leaves[i]), local);
             out[leaves[i]] = std::move(local);
             exact[i] = ex;
             proven[i] = pr;

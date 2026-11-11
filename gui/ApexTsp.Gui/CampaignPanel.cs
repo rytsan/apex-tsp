@@ -31,7 +31,11 @@ public static class CampaignPlan
         exact ? (n < 200 ? 60 : n < 1000 ? 300 : 600) : (n < 1000 ? 30 : n < 5000 ? 120 : 600);
 
     public const string TimeBoxes = "exact (APEX exact, Concorde): 60 s below 200 nodes, 300 s below 1000, 600 s above; "
-                                  + "heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s above";
+                                  + "heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s above; "
+                                  + "APEX (exact and scalable) polishes at most 120 s (half the box when smaller), then the LP gets the rest";
+
+    // APEX exact: ILS polish budget inside the time box; the LP / branch-and-cut gets the rest.
+    public static double PolishBox(double box) => Math.Min(120, box / 2);
 
     // Seconds as a short duration: "0.07 s", "439 s", "1.2 h", "49.5 d", "136.0 y".
     public static string Dur(double s)
@@ -337,7 +341,8 @@ public sealed partial class MainWindow
         _campLive.Text = $"{r.Instance} (n = {r.N}) · {r.Solver} · time box {r.Limit} s";
         if (r.IsApex)
         {
-            var s = new RunSettings { Mode = r.Solver == "apex_exact" ? "exact" : "scalable", TimeLimitS = r.Limit, Threads = 5, MemLimitMb = 4096, Seed = 1 };
+            var s = new RunSettings { Mode = r.Solver == "apex_exact" ? "exact" : "scalable", TimeLimitS = r.Limit, Threads = 5, MemLimitMb = 4096, Seed = 1,
+                                      PolishTimeLimitS = r.Solver == "apex_exact" ? CampaignPlan.PolishBox(r.Limit) : 0 };
             LoadSettingsIntoForm(s);
             if (!StartRun(s, RunBase(r))) { _campaignActive = false; Toast("campaign stopped: the engine did not start"); }
         }
@@ -374,6 +379,7 @@ public sealed partial class MainWindow
         o["solver"] = r.Solver;
         o["time_limit_s"] = r.Limit;
         if (r.IsApex) { o["threads"] = 5; o["seed"] = 1; }
+        if (r.Solver == "apex_exact") o["polish_time_limit_s"] = CampaignPlan.PolishBox(r.Limit);
         var p = RunBase(r) + ".json";
         File.WriteAllText(p + ".tmp", o.ToJsonString());
         File.Move(p + ".tmp", p, true);
@@ -400,11 +406,21 @@ public sealed partial class MainWindow
         }
         var p = _baseProc;
         p.EnableRaisingEvents = true;
+        _vm.Reset();
+        var t0 = DateTime.UtcNow;
         void Line(string? l)
         {
             if (l is null) return;
             lock (log) log.WriteLine(l);
-            Dispatcher.UIThread.Post(() => { _campLogItems.Add(l); if (_campLogItems.Count > 400) _campLogItems.RemoveAt(0); _campLog.ScrollIntoView(_campLogItems.Count - 1); });
+            var u = BaselineLog.Parse(r.Solver, l);
+            var sec = (DateTime.UtcNow - t0).TotalSeconds;
+            Dispatcher.UIThread.Post(() =>
+            {
+                _campLogItems.Add(l);
+                if (_campLogItems.Count > 400) _campLogItems.RemoveAt(0);
+                _campLog.ScrollIntoView(_campLogItems.Count - 1);
+                if (u is { } x) _vm.OnBaselineUpdate(sec, x);
+            });
         }
         p.OutputDataReceived += (_, e) => Line(e.Data);
         p.ErrorDataReceived += (_, e) => Line(e.Data);

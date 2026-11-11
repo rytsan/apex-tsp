@@ -201,7 +201,7 @@ void IpcServer::event(std::string_view name, std::initializer_list<KV> fields) {
                    src.empty() ? name : src);
     }
     if (pkt_.lower_bound != lb0 && !std::isnan(pkt_.lower_bound)) {
-        if (lagr) pkt_.lb_source = 1;
+        pkt_.lb_source = lagr ? 1 : 0;
         push_event(static_cast<uint8_t>(EventKind::LbImproved), pkt_.lower_bound, false, lagr ? "lagrangian" : "lp");
     }
     if (!proven_sent_ && (field("status") == "OPTIMAL_PROVEN" ||

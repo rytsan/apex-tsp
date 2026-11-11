@@ -208,7 +208,45 @@ public sealed class TourRenderer
 
     // Tour as one path through every k-th vertex; segments entirely off screen are skipped.
     private int DrawTour(SKCanvas canvas, Scene s, int k, int W, int H) =>
-        DrawTour(canvas, s.Tour, s.TourCount, s.Count, k, W, H, _tourPaint);
+        s.IsForest ? DrawForest(canvas, s, W, H) : DrawTour(canvas, s.Tour, s.TourCount, s.Count, k, W, H, _tourPaint);
+
+    private static readonly SKColor[] ForestColors =
+    [
+        new(0x1A, 0x73, 0xE8), new(0xE8, 0x71, 0x0A), new(0x1E, 0x8E, 0x3E), new(0x8E, 0x3F, 0xD0), new(0xD9, 0x30, 0x25),
+        new(0x00, 0x9E, 0xA8), new(0xB0, 0x60, 0x00), new(0xC2, 0x18, 0x5B), new(0x5F, 0x8A, 0x00), new(0x3D, 0x5A, 0xFE),
+    ];
+    private readonly SKPaint _forestPaint = new() { StrokeWidth = 0, IsAntialias = false, Style = SKPaintStyle.Stroke };
+
+    // Cluster forest: every vertex (no decimation, separators must not be skipped), one color per cycle.
+    private int DrawForest(SKCanvas canvas, Scene s, int W, int H)
+    {
+        var m = Math.Min(s.TourCount, s.Tour.Length);
+        var path = new SKPath();
+        int segments = 0, cycle = 0;
+        var prev = uint.MaxValue;
+        for (var j = 0; j < m; ++j)
+        {
+            var node = s.Tour[j];
+            if (node >= s.Count)
+            {
+                _forestPaint.Color = ForestColors[cycle++ % ForestColors.Length];
+                canvas.DrawPath(path, _forestPaint);
+                path.Dispose();
+                path = new SKPath();
+                prev = uint.MaxValue;
+                continue;
+            }
+            if (prev != uint.MaxValue && SegmentVisible(prev, node, W, H))
+            {
+                if (path.IsEmpty || path.LastPoint != new SKPoint(_sx[prev], _sy[prev])) path.MoveTo(_sx[prev], _sy[prev]);
+                path.LineTo(_sx[node], _sy[node]);
+                ++segments;
+            }
+            prev = node;
+        }
+        path.Dispose();
+        return segments;
+    }
 
     private int DrawTour(SKCanvas canvas, uint[] tour, int count, int nodes, int k, int W, int H, SKPaint paint)
     {

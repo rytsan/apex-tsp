@@ -54,6 +54,7 @@ IlsStats iterated_local_search(Tour& tour, const Instance& inst, const Candidate
             const uint32_t l2 = 1 + static_cast<uint32_t>(rng() % seg);
             if (!cfg.focus.empty())  // kick window covers a focus node
                 p = (ls.position(cfg.focus[p % cfg.focus.size()]) + n - static_cast<uint32_t>(rng() % (l1 + l2 + 1))) % n;
+            if (k == 0 && cfg.on_kick) cfg.on_kick(tour.order[p]);
             ls.double_bridge(p, l1, l2);
         }
         if (strong) { ++st.strong_kicks; stall = 0; }

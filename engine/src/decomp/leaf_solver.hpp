@@ -22,6 +22,8 @@ struct LeafConfig {
     std::function<void(uint32_t, uint8_t)> on_cluster;
     // Bounding box of every KD-tree node (id, x0, y0, x1, y1), once before the leaves are solved.
     std::function<void(uint32_t, double, double, double, double)> on_cluster_box;
+    // Leaf tour (KD-tree node index, cycle in global ids) as soon as it is solved (worker threads).
+    std::function<void(uint32_t, const std::vector<uint32_t>&)> on_leaf;
 };
 
 struct LeafStats {

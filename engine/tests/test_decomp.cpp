@@ -1,3 +1,4 @@
+#include <mutex>
 #include <doctest/doctest.h>
 
 #include <chrono>
@@ -85,6 +86,13 @@ TEST_CASE("T_patch_pla85900") {
     const auto t = apex::decompose_and_patch(inst, g, cfg, &st);
     REQUIRE(apex::is_valid_tour(t, inst.n));
     CHECK(t.cost == apex::tour_cost(inst, t));
+    const auto t1 = std::chrono::steady_clock::now();
+    apex::DecompStats sk;
+    const auto k = apex::cluster_merge(inst, g, cfg, &sk);
+    REQUIRE(apex::is_valid_tour(k, inst.n));
+    MESSAGE("pla85900 kway rounds=" << sk.levels << " final=" << k.cost << " vs 142382641: "
+                                    << 100.0 * (k.cost - 142382641.0) / 142382641.0 << "% s="
+                                    << std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count());
     CHECK(st.leaf.min_size > 800 * 35 / 100);  // density cuts: (0.35 * leaf, leaf]
     CHECK(st.leaf.max_size <= 800);
     MESSAGE("pla85900 leaves=" << st.leaf.leaves << " leaf_sum=" << st.leaf_sum << " patched=" << st.patched_cost
@@ -144,6 +152,41 @@ TEST_CASE("T_fixed_edge_kept") {
     CHECK((a == 18 || b == 18));
 }
 
+// k-way MST merge: a valid tour, deterministic for any thread count, every intermediate forest
+// a set of disjoint cycles, and no worse than the binary density-tree merge by more than 1%.
+TEST_CASE("T_cluster_merge_kway") {
+    const auto inst = random_instance(20000, 11, true);
+    const auto g = apex::build_candidate_graph(inst);
+    apex::DecompConfig cfg;
+    cfg.leaf.ils_iterations_per_node = 1;
+    cfg.leaf.exact_limit = 0;
+    cfg.leaf.threads = 4;
+    std::mutex mu;
+    size_t frames = 0;
+    bool disjoint = true;
+    cfg.on_forest = [&](const std::vector<std::vector<uint32_t>>& f) {
+        std::lock_guard<std::mutex> lk(mu);
+        ++frames;
+        std::vector<uint8_t> seen(inst.n, 0);
+        for (const auto& c : f)
+            for (uint32_t v : c) disjoint = disjoint && !seen[v]++;
+    };
+    apex::DecompStats st;
+    const auto a = apex::cluster_merge(inst, g, cfg, &st);
+    REQUIRE(apex::is_valid_tour(a, inst.n));
+    CHECK(a.cost == apex::tour_cost(inst, a));
+    CHECK(disjoint);
+    CHECK(frames > st.leaf.leaves);
+    CHECK(st.merges + 1 == st.leaf.leaves);
+    cfg.on_forest = nullptr;
+    cfg.leaf.threads = 1;
+    const auto b = apex::cluster_merge(inst, g, cfg);
+    CHECK(a.order == b.order);
+    const auto bin = apex::decompose_and_patch(inst, g, cfg);
+    CHECK(a.cost <= bin.cost * 1.01);
+    MESSAGE("kway 20000: leaves=" << st.leaf.leaves << " rounds=" << st.levels << " cost=" << a.cost << " binary=" << bin.cost);
+}
+
 TEST_CASE("T_polish_segments") {
     const auto inst = random_instance(30000, 5, true);
     const auto g = apex::build_candidate_graph(inst);
@@ -171,6 +214,33 @@ TEST_CASE("T_polish_segments") {
     CHECK(a.order == b.order);  // deterministic for any thread count
     CHECK(sb.final_cost == sa.final_cost);
     MESSAGE("polish 30000: construct=" << start.cost << " polished=" << a.cost << " iterations=" << sa.iterations);
+}
+
+// GUI hook: every ILS worker reports the nodes it kicks; observing never changes the tour.
+TEST_CASE("T_polish_on_work_observes") {
+    const auto inst = random_instance(3000, 7, true);
+    const auto g = apex::build_candidate_graph(inst);
+    apex::Tour start;
+    start.order.resize(inst.n);
+    for (uint32_t k = 0; k < inst.n; ++k) start.order[k] = k;
+    apex::PolishConfig pc;
+    pc.threads = 3;
+    pc.iterations_per_node = 1;
+    auto a = start;
+    apex::polish_tour(a, inst, g, pc);
+    std::mutex mu;
+    std::vector<uint64_t> calls(pc.threads, 0);
+    bool in_range = true;
+    pc.on_work = [&](uint32_t w, uint32_t v) {
+        std::lock_guard<std::mutex> lk(mu);
+        if (w >= calls.size() || v >= inst.n) { in_range = false; return; }
+        ++calls[w];
+    };
+    auto b = start;
+    apex::polish_tour(b, inst, g, pc);
+    CHECK(in_range);
+    for (uint64_t c : calls) CHECK(c > 0);
+    CHECK(a.order == b.order);
 }
 
 TEST_CASE("T_add_tour_edges") {

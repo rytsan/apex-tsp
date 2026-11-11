@@ -55,6 +55,7 @@ public:
     void publish_tour(const Tour& t, bool force = false);
     // Cluster map (scalable mode): state 0 idle, 1 solving, 2 patching; sent at most once per second.
     void cluster_state(uint32_t id, uint8_t state);
+    void flush_clusters(bool force);  // force: send pending states now (end of a phase)
     // Queues FINISHED (the report JSON, byte for byte) and waits until it is written to a client,
     // at most wait_ms (also waiting for a client to connect).
     bool finish(const std::string& report_json, int wait_ms = 5000);
@@ -68,7 +69,6 @@ private:
     void push_event(uint8_t kind, double value, bool heuristic, std::string_view detail);
     uint64_t now_us() const;
     std::vector<uint8_t> enc(MsgType t, std::span<const uint8_t> payload) const;
-    void flush_clusters(bool force);
 
     ServerConfig cfg_;
     std::unique_ptr<Listener> listener_;

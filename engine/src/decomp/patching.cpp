@@ -7,6 +7,8 @@
 #include <atomic>
 #include <exception>
 #include <numeric>
+#include <queue>
+#include <mutex>
 #include <thread>
 #include <tuple>
 
@@ -250,6 +252,230 @@ Tour decompose_and_patch(const Instance& inst, const CandidateGraph& g, const De
     std::sort(all.begin(), all.end());
     all.erase(std::unique(all.begin(), all.end()), all.end());
     st.polish_moves = lk_descent(t, inst, g, all);
+    st.final_cost = t.cost;
+    st.patch_s = std::chrono::duration<double>(Clock::now() - t1).count();
+    if (stats) *stats = st;
+    return t;
+}
+
+Tour cluster_merge(const Instance& inst, const CandidateGraph& g, const DecompConfig& cfg, DecompStats* stats) {
+    using Clock = std::chrono::steady_clock;
+    DecompStats st;
+    const auto t0 = Clock::now();
+    const uint32_t n = inst.n;
+    const auto tree = build_density_tree(inst, cfg.max_leaf);
+    // Forest shown to the GUI: one slot per current cluster, filled as leaves / groups finish.
+    std::mutex forest_mu;
+    std::vector<std::vector<uint32_t>> forest;
+    std::vector<int32_t> slot_of_leaf(tree.size(), -1);
+    for (size_t k = 0; k < tree.size(); ++k)
+        if (tree[k].left < 0) {
+            slot_of_leaf[k] = static_cast<int32_t>(forest.size());
+            forest.emplace_back();
+        }
+    auto show = [&](auto&& update) {
+        if (!cfg.on_forest) return;
+        std::lock_guard<std::mutex> lk(forest_mu);
+        update();
+        cfg.on_forest(forest);
+    };
+    LeafConfig lc = cfg.leaf;
+    if (cfg.on_forest)
+        lc.on_leaf = [&](uint32_t id, const std::vector<uint32_t>& c) { show([&] { forest[slot_of_leaf[id]] = c; }); };
+    if (cfg.leaf.on_cluster_box) {  // leaf boxes only (no internal nodes: merges follow the MST)
+        for (size_t k = 0; k < tree.size(); ++k) {
+            if (tree[k].left >= 0) continue;
+            double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+            for (uint32_t v : tree[k].points) {
+                x0 = std::min(x0, inst.xs[v]); y0 = std::min(y0, inst.ys[v]);
+                x1 = std::max(x1, inst.xs[v]); y1 = std::max(y1, inst.ys[v]);
+            }
+            cfg.leaf.on_cluster_box(static_cast<uint32_t>(k), x0, y0, x1, y1);
+        }
+    }
+    auto leaf_cycles = solve_leaves(inst, tree, lc, &st.leaf);
+    std::vector<std::vector<uint32_t>> cyc;  // current clusters
+    for (auto& c : leaf_cycles)
+        if (!c.empty()) cyc.push_back(std::move(c));
+    for (const auto& c : cyc)
+        for (size_t k = 0; c.size() > 1 && k < c.size(); ++k) st.leaf_sum += dist(inst, c[k], c[(k + 1) % c.size()]);
+    const auto t1 = Clock::now();
+    st.leaf_s = std::chrono::duration<double>(t1 - t0).count();
+    show([&] { forest = cyc; });
+
+    std::vector<uint32_t> owner(n, 0), pos(n, 0), touched;
+    std::mutex touched_mu;
+    uint32_t round = 0;
+    while (cyc.size() > 1) {
+        ++round;
+        const auto C = static_cast<uint32_t>(cyc.size());
+        for (uint32_t c = 0; c < C; ++c)
+            for (uint32_t v : cyc[c]) owner[v] = c;
+        // Cluster graph: cheapest candidate edge between every pair of touching clusters.
+        std::vector<std::vector<std::pair<uint32_t, int64_t>>> cadj(C);
+        {
+            std::vector<std::tuple<uint32_t, uint32_t, int64_t>> cross;
+            for (const auto& e : g.edges)
+                if (owner[e.u] != owner[e.v])
+                    cross.push_back({std::min(owner[e.u], owner[e.v]), std::max(owner[e.u], owner[e.v]), dist(inst, e.u, e.v)});
+            std::sort(cross.begin(), cross.end());
+            for (size_t k = 0; k < cross.size(); ++k) {
+                if (k > 0 && std::get<0>(cross[k]) == std::get<0>(cross[k - 1]) && std::get<1>(cross[k]) == std::get<1>(cross[k - 1])) continue;
+                const auto [a, b, w] = cross[k];
+                cadj[a].push_back({b, w});
+                cadj[b].push_back({a, w});
+            }
+        }
+        // Prim's MST over the clusters (the candidate graph is connected, so is this graph).
+        std::vector<std::tuple<int64_t, uint32_t, uint32_t>> mst;  // (weight, a, b)
+        {
+            std::vector<uint8_t> in(C, 0);
+            using QE = std::tuple<int64_t, uint32_t, uint32_t>;
+            std::priority_queue<QE, std::vector<QE>, std::greater<>> pq;
+            for (uint32_t s0 = 0; s0 < C; ++s0) {
+                if (in[s0]) continue;
+                in[s0] = 1;
+                for (auto [b, w] : cadj[s0]) pq.push({w, s0, b});
+                while (!pq.empty()) {
+                    auto [w, a, b] = pq.top();
+                    pq.pop();
+                    if (in[b]) continue;
+                    in[b] = 1;
+                    mst.push_back({w, a, b});
+                    for (auto [c2, w2] : cadj[b])
+                        if (!in[c2]) pq.push({w2, b, c2});
+                }
+            }
+        }
+        // Group cap from density: points per bounding-box area vs the median cluster.
+        std::vector<double> dens(C);
+        for (uint32_t c = 0; c < C; ++c) {
+            double x0 = INFINITY, y0 = INFINITY, x1 = -INFINITY, y1 = -INFINITY;
+            for (uint32_t v : cyc[c]) {
+                x0 = std::min(x0, inst.xs[v]); y0 = std::min(y0, inst.ys[v]);
+                x1 = std::max(x1, inst.xs[v]); y1 = std::max(y1, inst.ys[v]);
+            }
+            dens[c] = cyc[c].size() / std::max(1e-9, (x1 - x0) * (y1 - y0));
+        }
+        auto sorted = dens;
+        std::nth_element(sorted.begin(), sorted.begin() + C / 2, sorted.end());
+        const double med = sorted[C / 2];
+        const uint32_t maxg = std::max(2u, cfg.max_group);
+        std::vector<uint32_t> cap(C);
+        for (uint32_t c = 0; c < C; ++c)
+            cap[c] = dens[c] >= med ? 2u : dens[c] >= med / 4 ? std::min(3u, maxg) : maxg;
+        // Groups along MST edges, cheapest first (union-find; cap = smallest member cap).
+        std::vector<uint32_t> root(C), gsize(C, 1), gcap(cap);
+        std::iota(root.begin(), root.end(), 0u);
+        auto find = [&](uint32_t x) {
+            while (root[x] != x) x = root[x] = root[root[x]];
+            return x;
+        };
+        std::sort(mst.begin(), mst.end());
+        std::vector<std::vector<std::pair<uint32_t, uint32_t>>> gedges(C);  // MST edges inside a group
+        for (const auto& [w, a, b] : mst) {
+            uint32_t ra = find(a), rb = find(b);
+            const uint32_t gc = std::min(gcap[ra], gcap[rb]);
+            if (ra == rb || gsize[ra] + gsize[rb] > gc) continue;
+            if (ra > rb) std::swap(ra, rb);
+            root[rb] = ra;
+            gsize[ra] += gsize[rb];
+            gcap[ra] = gc;
+            gedges[ra].insert(gedges[ra].end(), gedges[rb].begin(), gedges[rb].end());
+            gedges[rb].clear();
+            gedges[ra].push_back({a, b});
+        }
+        std::vector<uint32_t> groups;
+        for (uint32_t c = 0; c < C; ++c)
+            if (find(c) == c && gsize[c] > 1) groups.push_back(c);
+        // Merge every group: clusters joined in the order of its MST edges.
+        std::vector<std::vector<uint32_t>> merged(C);
+        std::vector<int64_t> gstitch(C, 0), ggain(C, 0);
+        parallel_for(groups.size(), cfg.leaf.threads, [&](size_t gi) {
+            const uint32_t r = groups[gi];
+            std::vector<uint32_t> members{r};
+            std::vector<uint8_t> done_edge(gedges[r].size(), 0);
+            std::vector<uint32_t> cur = cyc[r], focus;
+            auto in_cur = [&](uint32_t c) { return std::find(members.begin(), members.end(), c) != members.end(); };
+            for (size_t step = 0; step + 1 < gsize[r]; ++step) {
+                uint32_t next = UINT32_MAX;  // a member joined to cur by an MST edge
+                for (size_t k = 0; k < gedges[r].size() && next == UINT32_MAX; ++k) {
+                    if (done_edge[k]) continue;
+                    const auto [a, b] = gedges[r][k];
+                    if (in_cur(a) != in_cur(b)) { next = in_cur(a) ? b : a; done_edge[k] = 1; }
+                }
+                const auto& other = cyc[next];
+                const auto m1 = static_cast<uint32_t>(cur.size()), m2 = static_cast<uint32_t>(other.size());
+                for (uint32_t k = 0; k < m1; ++k) pos[cur[k]] = k;
+                for (uint32_t k = 0; k < m2; ++k) pos[other[k]] = k;
+                // Cheapest exchange: drop (x, y = succ x) in cur and (p, q = succ p) in other, add
+                // (x, p) + (q, y) [other reversed] or (x, q) + (p, y) [other forward].
+                int64_t best = INT64_MAX;
+                uint32_t bx = 0, bp = 0;
+                bool brev = false;
+                for (uint32_t v : other)
+                    for (uint32_t k = g.adj_start[v]; k < g.adj_start[v + 1]; ++k) {
+                        const uint32_t u = g.other(g.adj[k], v);
+                        if (!in_cur(owner[u])) continue;
+                        for (uint32_t x : {u, cur[(pos[u] + m1 - 1) % m1]})
+                            for (uint32_t p : {v, other[(pos[v] + m2 - 1) % m2]}) {
+                                const uint32_t y = cur[(pos[x] + 1) % m1], q = other[(pos[p] + 1) % m2];
+                                const int64_t base = dist(inst, x, y) + dist(inst, p, q);
+                                const int64_t d1 = dist(inst, x, p) + dist(inst, q, y) - base;
+                                const int64_t d2 = dist(inst, x, q) + dist(inst, p, y) - base;
+                                if (d1 < best) { best = d1; bx = x; bp = p; brev = true; }
+                                if (d2 < best) { best = d2; bx = x; bp = p; brev = false; }
+                            }
+                    }
+                const uint32_t y = cur[(pos[bx] + 1) % m1], q = other[(pos[bp] + 1) % m2];
+                std::vector<uint32_t> out;
+                out.reserve(m1 + m2);
+                for (uint32_t k = 0; k < m1; ++k) out.push_back(cur[(pos[y] + k) % m1]);  // y .. x
+                for (uint32_t k = 0; k < m2; ++k)
+                    out.push_back(brev ? other[(pos[bp] + m2 - k) % m2] : other[(pos[q] + k) % m2]);  // p .. q or q .. p
+                gstitch[r] += best;
+                for (uint32_t v : {bx, y, bp, q}) {
+                    focus.push_back(v);
+                    for (uint32_t k = g.adj_start[v]; k < g.adj_start[v + 1]; ++k) focus.push_back(g.other(g.adj[k], v));
+                }
+                cur.swap(out);
+                members.push_back(next);
+            }
+            std::sort(focus.begin(), focus.end());
+            focus.erase(std::unique(focus.begin(), focus.end()), focus.end());
+            ggain[r] = reevaluate_cycle(inst, cur, focus, uint64_t(cfg.merge_iterations_per_focus) * focus.size(),
+                                        mix64(cfg.leaf.seed ^ mix64((uint64_t(round) << 32) | r)));
+            {
+                std::lock_guard<std::mutex> lk(touched_mu);
+                touched.insert(touched.end(), focus.begin(), focus.end());
+            }
+            show([&] {
+                for (uint32_t c : members)
+                    if (c != r) forest[c].clear();
+                forest[r] = cur;
+            });
+            merged[r] = std::move(cur);
+        });
+        // Next round: merged groups plus the clusters that stayed alone, in cluster order.
+        std::vector<std::vector<uint32_t>> nxt;
+        for (uint32_t c = 0; c < C; ++c) {
+            if (find(c) != c) continue;
+            nxt.push_back(gsize[c] > 1 ? std::move(merged[c]) : std::move(cyc[c]));
+            st.stitch_cost += gstitch[c];
+            st.reeval_gain += ggain[c];
+            if (gsize[c] > 1) st.merges += gsize[c] - 1;
+        }
+        cyc.swap(nxt);
+        ++st.levels;
+        show([&] { forest = cyc; });
+    }
+    Tour t;
+    t.order = cyc.empty() ? std::vector<uint32_t>{} : std::move(cyc[0]);
+    t.cost = tour_cost(inst, t);
+    st.patched_cost = t.cost;
+    std::sort(touched.begin(), touched.end());
+    touched.erase(std::unique(touched.begin(), touched.end()), touched.end());
+    st.polish_moves = lk_descent(t, inst, g, touched);
     st.final_cost = t.cost;
     st.patch_s = std::chrono::duration<double>(Clock::now() - t1).count();
     if (stats) *stats = st;
