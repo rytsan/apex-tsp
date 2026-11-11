@@ -108,8 +108,14 @@ def concorde(inst, limit, seed, work):
         tour = [int(v) for v in nums[1:]]
     m = re.search(r"Optimal Solution: ([\d.]+)", out)
     proven = rc == 0 and m is not None
+    # Stopped by the time box (10k+ nodes): out.sol is never written, so the bounds come from the
+    # log: best upper bound announced, best LP lower bound of the search (root or tree).
+    ubs = [float(x) for x in re.findall(r"(?:Set initial upperbound to|upperbound is|New upperbound[^:\n]*:) ([\d.]+)", out)]
+    lbs = [float(x) for x in re.findall(r"(?:New lower bound|Exact lower bound|LOWER BOUND|Final lower bound):? ([\d.]+)", out)]
     return {"status": "OPTIMAL_PROVEN" if proven else ("TIME_LIMIT" if rc is None else f"EXIT_{rc}"),
-            "solver_ub": float(m.group(1)) if m else None, "lb_source": "lp" if proven else None,
+            "solver_ub": float(m.group(1)) if m else (min(ubs) if ubs else None),
+            "lb": None if proven or not lbs else math.ceil(max(lbs) - 1e-6),
+            "lb_source": "lp" if proven or lbs else None,
             "wall_s": wall, "ram_peak_bytes": rss, "tour": tour, "log": out}
 
 
@@ -166,7 +172,8 @@ def main():
     tour = r.pop("tour")
     log = r.pop("log")
     valid = len(tour) == len(xs) and sorted(tour) == list(range(len(xs)))
-    ub = tour_length(tour, xs, ys, ceil) if valid else None
+    # No tour file (Concorde stopped by the time box): the UB it announced in its log.
+    ub = tour_length(tour, xs, ys, ceil) if valid else (round(r["solver_ub"]) if r["solver_ub"] is not None else None)
     if r["status"] == "OPTIMAL_PROVEN":
         r["lb"] = ub
     rep = {"instance": name, "solver": a.solver, "status": r["status"], "ub": ub,

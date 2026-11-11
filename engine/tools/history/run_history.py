@@ -27,7 +27,8 @@ BASE = os.path.join(ROOT, "engine", "tools", "baselines", "run_baseline.py")
 THREADS = 5
 MEM_MB = 4096
 SEED = 1
-EXACT_MAX_N = 4000  # exact runs (APEX and Concorde) up to this size; beyond: scalable / LKH only
+EXACT_MAX_N = 4000  # APEX exact only up to this size (the benchmark itself is 10k+: scalable vs Concorde vs LKH-3)
+MIN_N = 10000       # default instance size of the campaign
 
 
 def time_box(n, kind):
@@ -51,7 +52,7 @@ def plan(rows, solvers):
     for r in rows:
         n = int(r["n"])
         for s in solvers:
-            if s in ("apex_exact", "concorde") and n > EXACT_MAX_N:
+            if s == "apex_exact" and n > EXACT_MAX_N:
                 continue
             yield r["instance"], n, s, time_box(n, "exact" if s in ("apex_exact", "concorde") else "heur")
 
@@ -88,10 +89,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(ROOT, "out", "history", "final"))
     ap.add_argument("--only", default="")
-    ap.add_argument("--solvers", default="apex_exact,apex_scalable,concorde,lkh")
+    ap.add_argument("--solvers", default="apex_scalable,concorde,lkh")
+    ap.add_argument("--min-n", type=int, default=MIN_N)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    rows = [r for r in csv.DictReader(open(os.path.join(HERE, "reference.csv"))) if r["in_set"] == "yes"]
+    rows = [r for r in csv.DictReader(open(os.path.join(HERE, "reference.csv"))) if r["in_set"] == "yes" and int(r["n"]) >= a.min_n]
     if a.only:
         keep = set(a.only.split(","))
         rows = [r for r in rows if r["instance"] in keep]

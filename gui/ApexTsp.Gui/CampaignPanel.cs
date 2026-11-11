@@ -50,7 +50,7 @@ public static class CampaignPlan
             from s in Solvers
             where solvers.Contains(s)
             let exact = s is "apex_exact" or "concorde"
-            where !exact || i.N <= ExactMaxN
+            where s != "apex_exact" || i.N <= ExactMaxN
             select new CampaignRun(i.Name, i.N, s, TimeBox(i.N, exact))];
 }
 
@@ -98,7 +98,7 @@ public sealed partial class MainWindow
         {
             var baseline = s is "concorde" or "lkh";
             var available = !baseline || (root is not null && File.Exists(Baseline(root, s)));
-            var cb = new CheckBox { Content = labels[s] + (available ? "" : " (not built)"), IsChecked = available, IsEnabled = available, Margin = new Thickness(0, 0, 14, 0) };
+            var cb = new CheckBox { Content = labels[s] + (available ? "" : " (not built)"), IsChecked = available && s != "apex_exact", IsEnabled = available, Margin = new Thickness(0, 0, 14, 0) };
             if (baseline) ToolTip.SetTip(cb, "test-environment baseline (engine/tools/baselines), never part of the product");
             _campSolver[s] = cb;
             solverRow.Children.Add(cb);

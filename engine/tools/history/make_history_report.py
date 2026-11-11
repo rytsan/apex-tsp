@@ -177,7 +177,7 @@ def main():
              f"| OS | {meta.get('os', '-')} |", f"| APEX | {meta.get('threads_apex', 5)} threads, `--mem-limit-mb {meta.get('mem_limit_mb', 4096)}`, seed {meta.get('seed', 1)} |",
              "| Concorde / LKH-3 | 1 thread, seed 1; test environment only (not part of the product) |",
              f"| baselines | {(meta.get('baselines') or '-').strip().replace(chr(10), '; ')} |", "",
-             f"Time boxes per run: {meta.get('time_boxes', OLD_TIME_BOXES)}. Exact runs only up to "
+             f"Time boxes per run: {meta.get('time_boxes', OLD_TIME_BOXES)}. APEX exact only up to "
              f"{meta.get('exact_max_n', 4000)} nodes. APEX scalable always uses its whole time box; LKH-3 stops at its own trial limit.", "",
              "## Summary", "", "| solver | runs | proven optimal | at the reference value | median gap vs reference |", "|---|---|---|---|---|"]
     for s in SOLVERS:
