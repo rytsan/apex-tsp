@@ -28,7 +28,10 @@ public static class CampaignPlan
     public static readonly string[] Solvers = ["apex_exact", "apex_scalable", "concorde", "lkh"];
 
     public static double TimeBox(int n, bool exact) =>
-        exact ? (n < 200 ? 60 : n < 1000 ? 600 : n < 3000 ? 1800 : 3600) : (n < 1000 ? 30 : n < 5000 ? 120 : 600);
+        exact ? (n < 200 ? 60 : n < 1000 ? 300 : 600) : (n < 1000 ? 30 : n < 5000 ? 120 : 600);
+
+    public const string TimeBoxes = "exact (APEX exact, Concorde): 60 s below 200 nodes, 300 s below 1000, 600 s above; "
+                                  + "heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s above";
 
     // Seconds as a short duration: "0.07 s", "439 s", "1.2 h", "49.5 d", "136.0 y".
     public static string Dur(double s)
@@ -305,7 +308,7 @@ public sealed partial class MainWindow
         {
             ["date"] = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture),
             ["cpu"] = cpu, ["logical_cpus"] = Environment.ProcessorCount, ["os"] = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
-            ["threads_apex"] = 5, ["mem_limit_mb"] = 4096, ["seed"] = 1, ["exact_max_n"] = CampaignPlan.ExactMaxN,
+            ["threads_apex"] = 5, ["mem_limit_mb"] = 4096, ["seed"] = 1, ["exact_max_n"] = CampaignPlan.ExactMaxN, ["time_boxes"] = CampaignPlan.TimeBoxes,
             ["engine"] = EngineLocator.Find(_settings.EnginePath) ?? "", ["started_from"] = "gui",
             ["baselines"] = File.Exists(versions) ? File.ReadAllText(versions) : "",
         };
@@ -505,9 +508,12 @@ public sealed partial class MainWindow
         ("first", 46, "APEX exact time ÷ first published optimality proof"),
         ("scalable", 66, "APEX scalable tour vs the reference value"),
         ("LKH-3", 66, "LKH-3 tour vs the reference value (test-environment baseline)"),
+        ("UB-LB", 62, "APEX exact: (UB - LB) / UB, the gap its own LP bound certifies"),
+        ("UB-opt", 62, "APEX exact: (UB - reference) / reference"),
+        ("LB-opt", 62, "APEX exact: (reference - LB) / reference"),
     ];
     private static readonly (string Title, int From, int Count)[] CampGroups =
-        [("", 0, 3), ("first proof", 3, 2), ("Concorde, published", 5, 3), ("this machine (exact)", 8, 2), ("APEX exact time ÷ Concorde", 10, 5), ("tour vs reference", 15, 2)];
+        [("", 0, 3), ("first proof", 3, 2), ("Concorde, published", 5, 3), ("this machine (exact)", 8, 2), ("APEX exact time ÷ Concorde", 10, 5), ("tour vs reference", 15, 2), ("APEX exact gaps", 17, 3)];
 
     private static Grid CampGrid()
     {
@@ -568,6 +574,8 @@ public sealed partial class MainWindow
             var g = 100 * (ub - refv) / refv;
             return (g.ToString("+0.000;-0.000;0.000", CultureInfo.InvariantCulture) + "%", Math.Abs(g) < 5e-4 ? good : text);
         }
+        (string, IBrush) Pct(double g) => double.IsNaN(g) ? ("-", muted)
+            : (g.ToString("0.000", CultureInfo.InvariantCulture) + "%", Math.Abs(g) < 5e-4 ? good : text);
         var inst = CampaignInstances();
         var total = 0;
         var rHere = new List<double>();
@@ -601,7 +609,9 @@ public sealed partial class MainWindow
             CampCell(row, 5, T(p98), p98 is null ? muted : text, rr?.Abcc98Stated ?? "");
             CampCell(row, 6, rr?.Concorde99 is { Length: > 0 } c99 && p99 is null ? c99 : T(p99), p99 is null ? muted : text, rr?.Concorde99 ?? "");
             CampCell(row, 7, T(p03), p03 is null ? muted : text);
-            var cells = new[] { Time(co), Time(ex), R(apex, conc), R(apex, p03), R(apex, p99), R(apex, p98), R(apex, pFirst), VsRef(sc, refv), VsRef(lk, refv) };
+            double exUb = Num(ex, "ub"), exLb = Num(ex, "lb"), rv = refv > 0 ? refv : double.NaN;
+            var cells = new[] { Time(co), Time(ex), R(apex, conc), R(apex, p03), R(apex, p99), R(apex, p98), R(apex, pFirst), VsRef(sc, refv), VsRef(lk, refv),
+                                Pct(100 * (exUb - exLb) / exUb), Pct(100 * (exUb - rv) / rv), Pct(100 * (rv - exLb) / rv) };
             for (var k = 0; k < cells.Length; ++k) CampCell(row, 8 + k, cells[k].Item1, cells[k].Item2);
             var running = _campaignActive && _current is { } cur && cur.Instance == name;
             var bg = running ? Color.FromArgb(0x40, _pal.Accent.R, _pal.Accent.G, _pal.Accent.B) : _campRows.Children.Count % 2 == 1 ? _pal.Background : Colors.Transparent;

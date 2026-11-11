@@ -6,7 +6,7 @@ x {APEX exact, APEX scalable, Concorde, LKH-3}, one run at a time, resumable.
                                               [--solvers apex_exact,apex_scalable,concorde,lkh] [--dry-run]
 
 Per run: <out>/<instance>__<solver>.json (+ .log, APEX .tour). A run whose JSON exists is
-skipped, so an interrupted campaign continues where it stopped. Time boxes (TIME_BOX) depend on n
+skipped, so an interrupted campaign continues where it stopped. Time boxes (time_box) depend on n
 and are the same for APEX exact and Concorde; APEX scalable and LKH-3 share theirs. Concorde and
 LKH-3 are test-environment baselines (engine/tools/baselines), never part of the product.
 """
@@ -33,8 +33,12 @@ EXACT_MAX_N = 4000  # exact runs (APEX and Concorde) up to this size; beyond: sc
 def time_box(n, kind):
     """Seconds per run. kind: 'exact' (APEX exact, Concorde) or 'heur' (APEX scalable, LKH-3)."""
     if kind == "exact":
-        return 60 if n < 200 else 600 if n < 1000 else 1800 if n < 3000 else 3600
+        return 60 if n < 200 else 300 if n < 1000 else 600
     return 30 if n < 1000 else 120 if n < 5000 else 600
+
+
+TIME_BOXES = ("exact (APEX exact, Concorde): 60 s below 200 nodes, 300 s below 1000, 600 s above; "
+              "heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s above")
 
 
 def plan(rows, solvers):
@@ -99,7 +103,8 @@ def main():
             os.path.join(ROOT, "third_party_test", "VERSIONS.txt")) else ""
         json.dump({"commit": commit, "date": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
                    "cpu": cpu, "logical_cpus": os.cpu_count(), "os": platform.platform(), "threads_apex": THREADS,
-                   "mem_limit_mb": MEM_MB, "seed": SEED, "baselines": versions, "exact_max_n": EXACT_MAX_N},
+                   "mem_limit_mb": MEM_MB, "seed": SEED, "baselines": versions, "exact_max_n": EXACT_MAX_N,
+                   "time_boxes": TIME_BOXES},
                   open(meta, "w"), indent=1)
     done = 0
     for inst_name, n, solver, limit in todo:

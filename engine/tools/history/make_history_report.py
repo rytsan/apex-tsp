@@ -5,8 +5,8 @@ run_history.py) + reference.csv:
   python3 engine/tools/history/make_history_report.py out/history/final [docs/HISTORY_REPORT.md]
 
 Writes the Markdown report, docs/history/*.svg charts and docs/history/history.json (the rows the
-GUI shows). Gaps: certified = (UB - LB) / UB with the solver's own LB; vs reference = (UB - ref) /
-ref. mona-lisa100K is compared with its best known tour and never called optimal.
+GUI shows). Gaps: certified = (UB - LB) / UB with the solver's own LB; UB vs reference = (UB - ref) /
+ref; LB vs reference = (ref - LB) / ref. mona-lisa100K is compared with its best known tour and never called optimal.
 """
 import csv
 import json
@@ -20,6 +20,11 @@ ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 SOLVERS = ["apex_exact", "apex_scalable", "concorde", "lkh"]
 NAMES = {"apex_exact": "APEX exact", "apex_scalable": "APEX scalable", "concorde": "Concorde", "lkh": "LKH-3"}
 COLORS = {"apex_exact": "#1A73E8", "apex_scalable": "#E8710A", "concorde": "#1E8E3E", "lkh": "#8E3FD0", "concorde03": "#9AA1AC"}
+
+
+# campaigns whose meta.json predates the time_boxes field
+OLD_TIME_BOXES = ("exact (APEX exact, Concorde): 60 s below 200 nodes, 600 s below 1000, 1800 s below 3000, 3600 s above; "
+                  "heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s above")
 
 
 def fnum(v, fmt="{:.1f}"):
@@ -40,6 +45,11 @@ def load(campaign):
 def gap_ref(run, refv):
     ub = run.get("ub") if run else None
     return None if ub is None or not refv else 100.0 * (ub - refv) / refv
+
+
+def gap_lb_ref(run, refv):
+    lb = run.get("lb") if run else None
+    return None if lb is None or not refv else 100.0 * (refv - lb) / refv
 
 
 def gap_cert(run):
@@ -167,9 +177,8 @@ def main():
              f"| OS | {meta.get('os', '-')} |", f"| APEX | {meta.get('threads_apex', 5)} threads, `--mem-limit-mb {meta.get('mem_limit_mb', 4096)}`, seed {meta.get('seed', 1)} |",
              "| Concorde / LKH-3 | 1 thread, seed 1; test environment only (not part of the product) |",
              f"| baselines | {(meta.get('baselines') or '-').strip().replace(chr(10), '; ')} |", "",
-             "Time boxes per run: exact (APEX exact, Concorde): 60 s below 200 nodes, 600 s below 1000, 1800 s below 3000, 3600 s up to "
-             f"{meta.get('exact_max_n', 4000)} nodes (larger: not run); heuristic (APEX scalable, LKH-3): 30 s below 1000 nodes, 120 s below 5000, 600 s. "
-             "APEX scalable always uses its whole time box; LKH-3 stops at its own trial limit.", "",
+             f"Time boxes per run: {meta.get('time_boxes', OLD_TIME_BOXES)}. Exact runs only up to "
+             f"{meta.get('exact_max_n', 4000)} nodes. APEX scalable always uses its whole time box; LKH-3 stops at its own trial limit.", "",
              "## Summary", "", "| solver | runs | proven optimal | at the reference value | median gap vs reference |", "|---|---|---|---|---|"]
     for s in SOLVERS:
         nr, pr, at, med = stats(s)
@@ -183,6 +192,18 @@ def main():
     lines += ["## Per instance", "",
               "| instance | n | reference | first solved | Concorde 1998 paper (400 MHz Alpha) | Concorde 1999 s (500 MHz Alpha) | Concorde 2003 s (2.8 GHz Xeon) | APEX exact | APEX scalable vs ref | Concorde here | LKH-3 vs ref | APEX / Concorde here | APEX / 1998 / 2003 / first |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|---|"] + table
+    lines += ["", "## Bounds and gaps", "",
+              "UB-LB = (UB - LB) / UB with the solver's own LB (LP for exact runs, Lagrangian for APEX scalable; LKH-3 has none). "
+              "UB-ref = (UB - ref) / ref and LB-ref = (ref - LB) / ref, ref = the reference value (optimum, or best known tour).", "",
+              "| instance | n | ref | solver | status | UB | LB | UB-LB % | UB-ref % | LB-ref % | wall s |",
+              "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for d in data:
+        for s in SOLVERS:
+            run = d["runs"].get(s)
+            if run:
+                lines.append(f"| {d['instance']} | {d['n']} | {d['reference']} | {NAMES[s]} | {run.get('status')} | {fnum(run.get('ub'), '{}')} | "
+                             f"{fnum(run.get('lb'), '{}')} | {fnum(gap_cert(run), '{:.4f}')} | {fnum(gap_ref(run, d['reference']), '{:+.4f}')} | "
+                             f"{fnum(gap_lb_ref(run, d['reference']), '{:.4f}')} | {fnum(run.get('wall_s'))} |")
     lines += ["", "## Milestones: then and now", "",
               "| year | team | instance | n | first solution CPU (published) | Concorde 1998 paper | Concorde 1999 | Concorde here | APEX here |", "|---|---|---|---|---|---|---|---|---|"]
     for r in sorted((r for r in ref.values() if r["year_solved"]), key=lambda r: int(r["year_solved"])):
