@@ -10,3 +10,4 @@ engine/build.log
 third_party_test/
 __pycache__/
 graphify-out/
+gui/aot/

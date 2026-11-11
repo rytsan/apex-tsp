@@ -44,6 +44,7 @@ double dp_violation(const SupportGraph& g, const std::vector<uint32_t>& handle, 
 struct DpConfig {
     double violation_tol = 1e-5;
     uint32_t max_tooth = 5000;  // BFS cap on a domino's T (larger thetas are skipped)
+    uint32_t threads = 1;       // domino generation workers (output identical for any count)
 };
 
 struct DpStats {

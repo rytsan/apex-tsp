@@ -512,7 +512,10 @@ private:
         std::vector<CandidateGraph> gs(W, g_);
         std::vector<std::unique_ptr<CutLoop>> loops;
         std::vector<Pseudocosts> pcs(W, pc_);
-        for (size_t w = 0; w < W; ++w) loops.push_back(std::make_unique<CutLoop>(loop_, gs[w]));
+        for (size_t w = 0; w < W; ++w) {
+            loops.push_back(std::make_unique<CutLoop>(loop_, gs[w]));
+            loops.back()->set_sep_threads(1);  // the batch already runs W nodes at once
+        }
         std::vector<NodeOutcome> res(W);
         std::vector<std::exception_ptr> err(W);
         const int64_t ub = out_.ub;

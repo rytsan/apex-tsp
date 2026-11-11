@@ -351,6 +351,7 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         const uint32_t added = apex::add_tour_edges(g, inst, tour);
         apex::BnCConfig bc;
         bc.parallel_lps = std::clamp<uint32_t>(opt.threads, 1, 6);
+        bc.root.dp.threads = opt.threads;  // root separation; parallel tree batches drop to 1 per node
         // The heuristic phase already gives a near-optimal UB: no dive needed to find one, the tree
         // only has to raise the LB, so best-bound from the root.
         bc.select = apex::BnCConfig::Select::BestBound;

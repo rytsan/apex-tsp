@@ -7,6 +7,7 @@
 #include "bnc/pricing.hpp"
 #include "core/instance.hpp"
 #include "cuts/blossom.hpp"
+#include "cuts/domino.hpp"
 #include "cuts/mincut.hpp"
 #include "cuts/pool.hpp"
 #include "graph/candidate_graph.hpp"
@@ -21,6 +22,7 @@ struct RootLoopConfig {
     bool use_blossom = true;
     bool use_comb = true;               // combs from blossoms of the x_e = 1-shrunk support
     bool use_dp = true;                 // domino-parity (planar dual, needs coordinates)
+    DpConfig dp;                        // dp.threads: separation workers of this loop
     uint32_t age_limit = 10;
     uint32_t max_cuts_per_round = 500;  // most violated first
     uint32_t max_rounds = 10000;
@@ -69,6 +71,7 @@ struct RootLoopResult {
     uint32_t rcf_fixed0 = 0, rcf_fixed1 = 0;
     uint64_t cuts_sec = 0, cuts_blossom = 0, cuts_component = 0, cuts_comb = 0, cuts_dp = 0;
     double lp_s = 0, sep_s = 0, pricing_s = 0, total_s = 0;
+    double sep_pool_s = 0, sep_sec_s = 0, sep_blossom_s = 0, sep_comb_s = 0, sep_dp_s = 0;  // parts of sep_s
     std::vector<RootRoundLog> rounds;
     PoolStats pool;
     Lp lp;                           // final root LP (run_root_loop only; bounds include RCF fixes)
@@ -138,6 +141,7 @@ private:
 
 public:
     const PricingStats& pricing_stats() const { return pricer_.stats(); }
+    void set_sep_threads(uint32_t t) { cfg_.dp.threads = t; }  // parallel tree batches: 1 per node
 
 private:
 

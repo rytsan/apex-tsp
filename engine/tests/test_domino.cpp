@@ -172,3 +172,18 @@ TEST_CASE("T_dp_separates_planar_gadget") {
     REQUIRE(back.size() == 1);
     CHECK(back.violation(back.at(0), p.edges, p.x) == doctest::Approx(cuts[0].violation));
 }
+
+// Domino generation runs on worker threads; the merge in face order makes the cuts identical.
+TEST_CASE("T_dp_threads_same_cuts") {
+    const auto p = planar_gadget();
+    const auto g = apex::build_support(p.n, p.edges, p.x);
+    apex::DpConfig one, four;
+    four.threads = 4;
+    const auto a = apex::separate_dp(g, p.xs, p.ys, one), b = apex::separate_dp(g, p.xs, p.ys, four);
+    REQUIRE(a.size() == b.size());
+    for (size_t k = 0; k < a.size(); ++k) {
+        CHECK(a[k].handle == b[k].handle);
+        CHECK(a[k].dominoes == b[k].dominoes);
+        CHECK(a[k].violation == b[k].violation);
+    }
+}

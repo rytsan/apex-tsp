@@ -1,11 +1,13 @@
 #include "cuts/domino.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <limits>
 #include <queue>
 #include <set>
+#include <thread>
 #include <unordered_map>
 
 #include "core/control.hpp"
@@ -189,29 +191,43 @@ std::vector<DpCut> separate_dp(const SupportGraph& g, const std::vector<double>&
         padj[e.v].push_back({e.u, i});
     }
 
-    // Exact cut values on the full support.
     std::vector<uint8_t> inset(n, 0);
-    auto cutval = [&](const std::vector<uint32_t>& s) {
-        for (uint32_t v : s) inset[v] = 1;
-        double c = 0;
-        for (uint32_t v : s)
-            for (uint32_t k = g.adj_start[v]; k < g.adj_start[v + 1]; ++k)
-                if (!inset[g.other(g.adj[k], v)]) c += g.edges[g.adj[k]].cap;
-        for (uint32_t v : s) inset[v] = 0;
-        return c;
-    };
 
     // ---- 3. dominoes: min-cost 3 edge-disjoint dual paths between the two faces of each edge.
-    std::vector<DomCand> doms;
-    std::set<Domino> seen_dom;
-    std::vector<double> dist(F, std::numeric_limits<double>::infinity());
-    std::vector<uint32_t> local(F, kNone), touched;
-    std::vector<uint8_t> cyc(K, 0), chord(K, 0);
-    std::vector<uint32_t> bfs_mark(n, 0), tm(n, 0);
-    uint32_t bfs_tick = 0, tt = 0;
+    // Faces are independent: worker threads take them in any order with their own scratch and
+    // write per-face buckets, merged below in face order, so the output never depends on threads.
+    struct Scratch {
+        std::vector<double> dist;
+        std::vector<uint32_t> local, touched, bfs_mark, tm;
+        std::vector<uint8_t> cyc, chord, inset;
+        uint32_t bfs_tick = 0, tt = 0;
+        std::set<Domino> seen_dom;  // per worker: skips the w computation of repeats
+    };
+    std::vector<std::vector<DomCand>> per_face(F);
     constexpr double kTheta = 4.0, kChord = 2.0;  // w = total - 3 < 1; chord x(E(A:B)) < 2
-    for (uint32_t s = 0; s < F; ++s) {
+    auto gen = [&](uint32_t s, Scratch& sc) {
         pause_point();
+        auto& dist = sc.dist;
+        auto& local = sc.local;
+        auto& touched = sc.touched;
+        auto& cyc = sc.cyc;
+        auto& chord = sc.chord;
+        auto& bfs_mark = sc.bfs_mark;
+        auto& tm = sc.tm;
+        auto& bfs_tick = sc.bfs_tick;
+        auto& tt = sc.tt;
+        auto& inset = sc.inset;
+        auto& seen_dom = sc.seen_dom;
+        auto& doms = per_face[s];
+        auto cutval = [&](const std::vector<uint32_t>& set) {  // exact cut value on the full support
+            for (uint32_t v : set) inset[v] = 1;
+            double c = 0;
+            for (uint32_t v : set)
+                for (uint32_t k = g.adj_start[v]; k < g.adj_start[v + 1]; ++k)
+                    if (!inset[g.other(g.adj[k], v)]) c += g.edges[g.adj[k]].cap;
+            for (uint32_t v : set) inset[v] = 0;
+            return c;
+        };
 
 
         // Region: faces within kTheta of s (bounded Dijkstra).
@@ -400,7 +416,27 @@ std::vector<DpCut> separate_dp(const SupportGraph& g, const std::vector<double>&
         }
         for (uint32_t a : touched) { dist[a] = std::numeric_limits<double>::infinity(); local[a] = kNone; }
         touched.clear();
+    };
+    const uint32_t W = std::max<uint32_t>(1, std::min<uint32_t>(cfg.threads, F));
+    std::atomic<uint32_t> next_face{0};
+    auto worker = [&] {
+        Scratch sc{std::vector<double>(F, std::numeric_limits<double>::infinity()), std::vector<uint32_t>(F, kNone), {},
+                   std::vector<uint32_t>(n, 0), std::vector<uint32_t>(n, 0), std::vector<uint8_t>(K, 0),
+                   std::vector<uint8_t>(K, 0), std::vector<uint8_t>(n, 0), 0, 0, {}};
+        for (uint32_t s; (s = next_face.fetch_add(1, std::memory_order_relaxed)) < F;) gen(s, sc);
+    };
+    if (W == 1) worker();
+    else {
+        std::vector<std::thread> pool;
+        for (uint32_t w = 0; w < W; ++w) pool.emplace_back(worker);
+        for (auto& t : pool) t.join();
     }
+    std::vector<DomCand> doms;
+    std::set<Domino> seen_dom;
+    for (auto& bucket : per_face)
+        for (auto& c : bucket)
+            if (seen_dom.insert(c.d).second) doms.push_back(std::move(c));
+    per_face = {};
     st.dominoes = static_cast<uint32_t>(doms.size());
 
     // ---- 4. minimum odd closed walks (< 1) in dual + domino edges, from every domino endpoint.

@@ -302,17 +302,24 @@ RootLoopResult CutLoop::solve(const BoundChanges& bc, const NodeBasis* warm, con
         std::vector<std::pair<double, size_t>> cand;  // (violation, pool index)
         for (size_t idx : pool_.violated_outside(g_.edges, res.x)) cand.push_back({pool_.violation(pool_.at(idx), g_.edges, res.x), idx});
         log.reactivated = static_cast<uint32_t>(cand.size());
+        out.sep_pool_s += secs(ts);
+        auto tf = Clock::now();
+        const auto lap = [&](double& acc) { const auto now = Clock::now(); acc += std::chrono::duration<double>(now - tf).count(); tf = now; };
         SecSeparationStats sst;
         const auto secs_found = separate_sec(sup, cfg_.sec, &sst);
         for (const auto& c : secs_found) pool_.stage_sec(c);
+        lap(out.sep_sec_s);
         std::vector<BlossomCut> bl;
         if (cfg_.use_blossom && secs_found.empty()) bl = separate_blossom(sup, cfg_.blossom);
         for (const auto& c : bl) pool_.stage_blossom(c);
+        lap(out.sep_blossom_s);
         std::vector<CombCut> cb;
         if (cfg_.use_comb && secs_found.empty()) cb = separate_comb(sup, cfg_.blossom);
         for (const auto& c : cb) pool_.stage_comb(c);
+        lap(out.sep_comb_s);
         std::vector<DpCut> dp;
-        if (cfg_.use_dp && secs_found.empty()) dp = separate_dp(sup, inst_.xs, inst_.ys);
+        if (cfg_.use_dp && secs_found.empty()) dp = separate_dp(sup, inst_.xs, inst_.ys, cfg_.dp);
+        lap(out.sep_dp_s);
         if (dp.size() > 200) dp.resize(200);  // most violated first
         for (const auto& c : dp) pool_.stage_dp(c);
         for (size_t idx : pool_.commit()) {

@@ -40,6 +40,7 @@ int main(int argc, char** argv) {
             else if (f == "--no-blossom") cfg.use_blossom = false;
             else if (f == "--no-comb") cfg.use_comb = false;
             else if (f == "--no-dp") cfg.use_dp = false;
+            else if (f == "--sep-threads") cfg.dp.threads = static_cast<uint32_t>(std::stoul(val()));
             else if (f == "--tree") tree = true;
             else if (f == "--best-bound") best_bound = true;
             else if (f == "--parallel-lps") parallel_lps = static_cast<uint32_t>(std::stoul(val()));
@@ -145,6 +146,8 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(r.cuts_component), static_cast<unsigned long long>(r.cuts_sec),
                     static_cast<unsigned long long>(r.cuts_blossom), static_cast<unsigned long long>(r.cuts_comb), static_cast<unsigned long long>(r.cuts_dp), r.pool.size, r.pool.in_lp,
                     static_cast<unsigned long long>(r.pool.aged_out), static_cast<unsigned long long>(r.pool.duplicates));
+        std::printf("  sep parts: pool+support=%.2fs sec=%.2fs blossom=%.2fs comb=%.2fs dp=%.2fs\n", r.sep_pool_s, r.sep_sec_s,
+                    r.sep_blossom_s, r.sep_comb_s, r.sep_dp_s);
         std::printf("  pricing: rounds=%u priced_edges=%llu final_edges=%zu\n", r.pricing_rounds,
                     static_cast<unsigned long long>(r.priced_edges), g.edges.size());
         uint64_t lp_iters = 0;
