@@ -5,6 +5,9 @@
 #include <deque>
 #include <cstdio>
 #include <algorithm>
+#include <atomic>
+#include <functional>
+#include <thread>
 #include <exception>
 #include <filesystem>
 #include <iterator>
@@ -151,9 +154,11 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
     };
     uint64_t tours_found = 0;
     int64_t last_ub = INT64_MAX;
+    std::atomic<int64_t> watchdog_ub{INT64_MAX};  // last_ub for the watchdog thread
     auto count_ub = [&](int64_t ub) {
         if (ub < last_ub) ++tours_found;
         last_ub = std::min(last_ub, ub);
+        watchdog_ub = last_ub;
     };
     tel.event("instance_loaded", {{"name", inst.name}, {"n", std::to_string(inst.n)},
                                   {"metric", apex::metric_name(inst.metric)}, {"ms", fmt(since(t0) * 1e3)}});
@@ -177,6 +182,48 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         tel.event("ub0", {{"source", "hilbert"}, {"ub", std::to_string(tour.cost)}, {"ms", fmt(since(t0) * 1e3)}});
     }
     count_ub(tour.cost);
+
+    // Hard deadline: a phase without its own time check (construct on huge n, a first root LP)
+    // can run far past --time-limit. Past the box + grace the watchdog writes a TIME_LIMIT report
+    // with the best UB seen (its tour is not saved) and ends the process.
+    std::mutex wd_mu;
+    std::condition_variable wd_cv;
+    bool wd_stop = false;
+    std::thread watchdog;
+    if (opt.time_limit_s > 0 && opt.mode != "lab") {
+        const double grace = std::max(60.0, 0.1 * opt.time_limit_s);
+        const auto deadline = t0 + std::chrono::duration_cast<Clock::duration>(
+                                       std::chrono::duration<double>(opt.time_limit_s - prior_wall + grace));
+        watchdog = std::thread([&, deadline] {
+            std::unique_lock<std::mutex> lk(wd_mu);
+            if (wd_cv.wait_until(lk, deadline, [&] { return wd_stop; })) return;
+            apex::Report rep;
+            rep.instance = inst.name;
+            rep.mode = opt.mode;
+            rep.ub = watchdog_ub;
+            rep.wall_s = prior_wall + since(t0);
+            rep.seed = opt.seed;
+            rep.ram_peak_bytes = apex::peak_rss_bytes();
+            rep.status = "TIME_LIMIT";
+            rep.threads = opt.threads;
+            rep.hardware = apex::hardware_string();
+            rep.mem_limit_mb = opt.mem_limit_mb;
+            if (!opt.report.empty()) apex::write_report_file(opt.report, rep);
+            tel.event("done", {{"status", "TIME_LIMIT"}, {"mode", opt.mode}, {"ub", std::to_string(rep.ub)}, {"lb", "null"},
+                               {"watchdog", "true"}, {"wall_s", fmt(rep.wall_s)}});
+            std::fflush(stdout);
+            std::_Exit(3);
+        });
+    }
+    struct WatchdogStop {
+        std::function<void()> f;
+        ~WatchdogStop() { f(); }
+    } wd_guard{[&] {
+        if (!watchdog.joinable()) return;
+        { std::lock_guard<std::mutex> lk(wd_mu); wd_stop = true; }
+        wd_cv.notify_all();
+        watchdog.join();
+    }};
 
     // Graceful MEM_LIMIT (M4.5): guards at phase boundaries (RSS >= 90% of --mem-limit-mb) and
     // allocation failures under the OS cap both end in: best tour so far -> checkpoint + report.

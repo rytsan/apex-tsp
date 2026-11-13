@@ -368,7 +368,12 @@ public sealed partial class MainWindow
     {
         if (!CampaignOwns(s) || _current is not { } r || _vm.Finished || Done(r)) return;
         if (!_campaignActive) return;
-        WriteRunJson(r, new JsonObject { ["status"] = "ERROR", ["error"] = reason });
+        // Engine watchdog (hard time limit) exits without FINISHED but leaves a TIME_LIMIT report.
+        JsonObject? rep = null;
+        try { if (File.Exists(s.ReportPath)) rep = JsonNode.Parse(File.ReadAllText(s.ReportPath)) as JsonObject; }
+        catch (Exception e) when (e is JsonException or IOException) { }
+        if (File.Exists(s.LogPath)) File.Copy(s.LogPath, RunBase(r) + ".log", true);
+        WriteRunJson(r, rep ?? new JsonObject { ["status"] = "ERROR", ["error"] = reason });
         Next();
     }
 
