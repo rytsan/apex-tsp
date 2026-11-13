@@ -436,7 +436,14 @@ int run(const apex::Options& opt, apex::TelemetrySink& log) {
         best = tour;
     }
 
-    if (exact) {  // branch-and-cut from the heuristic UB (Sprint 3 + M4.7 hand-off)
+    // The heuristic phases can overrun the box on huge n (construct alone > 600 s at 744k): a
+    // zero budget used to reach run_bnc, whose first root LP has no deadline and ran for hours.
+    const bool bnc_time = opt.time_limit_s <= 0 || opt.time_limit_s - prior_wall - since(t0) > 1;
+    if (exact && !bnc_time) {
+        status = "TIME_LIMIT";
+        tel.event("bnc_skipped", {{"cause", "time_limit"}, {"ub", std::to_string(tour.cost)}});
+    }
+    if (exact && bnc_time) {  // branch-and-cut from the heuristic UB (Sprint 3 + M4.7 hand-off)
         phase("bnc", tour, rng);
         const uint32_t added = apex::add_tour_edges(g, inst, tour);
         apex::BnCConfig bc;
